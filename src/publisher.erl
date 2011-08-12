@@ -1,4 +1,4 @@
--module(uvc_publisher).
+-module(publisher).
 
 -include_lib("erlmedia/include/video_frame.hrl").
 -include_lib("rtmp/include/rtmp.hrl").
@@ -18,7 +18,6 @@
   width,
   height,
   rtmp,
-  base_vpts,
   start,
   stream,
   buffer = [],
@@ -33,7 +32,7 @@ publish(URL, Options) ->
 
 
 init([URL, Options]) ->
-  {ok, UVC} = uvc4erl:open(Options),
+  {ok, UVC} = uvc4erl:capture([{format,yuv},{consumer,self()}|Options]),
   % UVC = undefined,
   
   {W,H} = proplists:get_value(size, Options),
@@ -57,27 +56,12 @@ init([URL, Options]) ->
   Capture = open_port({spawn, "arecord --disable-resample -c 2 -D default:CARD=U0x46d0x821 -r 32000 -f S16_LE"}, [stream, binary]),
   put(pcm_buf, <<>>),
   put(pcm_dts, 0),
-  {ok, AACEnc, AAConfig} = ems_sound2:init_faac(<<SampleRate:32/little, Channels:32/little>>),
+  {ok, AACEnc, AConfig} = faac:init([{sample_rate,SampleRate},{channels,Channels}]),
   
-  send_frame(RTMP, Stream, #video_frame{
-    content = audio,
-    flavor = config,
-    codec = aac,
-    sound = {stereo, bit16, rate44},
-    pts = 0, 
-    dts = 0,
-    body = AAConfig
-  }),
+  send_frame(RTMP, Stream, AConfig),
   
-  {ok, X264, VConfig} = ems_video:init_x264([{width,W},{height,H},{config,"h264/priv/encoder.preset"},{annexb,false}]),
-  send_frame(RTMP, Stream, #video_frame{
-    content = video,
-    flavor = config,
-    codec = h264,
-    pts = 0, 
-    dts = 0,
-    body = VConfig
-  }),
+  {ok, X264, VConfig} = x264:init_x264([{width,W},{height,H},{config,"h264/priv/encoder.preset"},{annexb,false}]),
+  send_frame(RTMP, Stream, VConfig),
   
   
   {ok, #publisher{
@@ -148,32 +132,20 @@ enqueue(#video_frame{} = Frame, #publisher{buffer = Buf1, rtmp = RTMP, stream = 
 % handle_info({uvc4erl, UVC, Codec, PTS1, RAW}, State) ->
 %   {noreply, State};
 
-handle_info({uvc4erl, UVC, Codec, _PTS1, Jpeg}, #publisher{base_vpts = BaseVPTS, width = Width, height = Height, x264 = X264} = State) ->
-  % PTS = PTS1 - BaseVPTS,
+handle_info({uvc4erl, _UVC, yuv, _PTS1, YUV}, State) ->
   Drop = drop(),
-  % Drop = 0,
-
-  T1 = erlang:now(),
-  PTS = timer:now_diff(T1, State#publisher.start) div 1000,
-  YUV = case Codec of
-    jpeg -> {Y, Width, Height} = jpeg:decode(Jpeg), Y;
-    yuv -> Jpeg
+  if
+    Drop > 0 -> error_logger:warning_msg("Drop ~p frames in publisher~n", [Drop]);
+    true -> ok
   end,
-  T2 = erlang:now(),
-  State1 = case ems_video:yuv_x264(X264, YUV, PTS) of
-    ok -> State;
-    {ok, Flavor, PTSEnc, DTSEnc, H264} ->
-      T3 = erlang:now(),
-      enqueue(#video_frame{
-        content = video,
-        flavor = Flavor,
-        codec = h264,
-        pts = PTSEnc,
-        dts = DTSEnc,
-        body = H264
-      }, State)
-  
-    % file:write(get(file), H264)
+  T1 = erlang:now(),
+  PTS = timer:now_diff(T1, State#publisher.start) div 1000,  
+  handle_info({yuv, YUV, PTS}, State);
+
+handle_info({yuv, YUV, PTS}, #publisher{x264 = X264} = State) ->
+  State1 = case x264:encode(X264, YUV, PTS) of
+    undefined -> State;
+    #video_frame{} = Frame -> enqueue(Frame, State)
   end,
   
   VideoCount = State#publisher.video_count + 1,
@@ -192,26 +164,15 @@ handle_info({Capture, {data, Raw}}, State) ->
       {noreply, State}
   end;
 
-handle_info({audiocapture, Capture, DTS, PCM}, #publisher{faac = AACEnc} = State) ->
-  T1 = erlang:now(),
-  State1 = case ems_sound2:pcm_aac(AACEnc, PCM) of
+handle_info({audiocapture, _Capture, DTS, PCM}, #publisher{faac = AACEnc} = State) ->
+  State1 = case faac:encode(AACEnc, PCM) of
     undefined -> State;
-    AAC -> 
-      T2 = erlang:now(),
-      enqueue(#video_frame{
-        content = audio,
-        flavor = frame,
-        codec = aac,
-        sound = {stereo, bit16, rate44},
-        pts = DTS,
-        dts = DTS,
-        body = AAC
-      }, State)
+    #video_frame{} = AFrame -> enqueue(AFrame#video_frame{dts = DTS, pts = DTS}, State)
   end,
   
   AudioCount = State#publisher.audio_count + (size(PCM) div 2),
-  AbsDelta = timer:now_diff(erlang:now(),State#publisher.start) div 1000,
-  StreamDelta = State#publisher.audio_count div (32*2),
+  % AbsDelta = timer:now_diff(erlang:now(),State#publisher.start) div 1000,
+  % StreamDelta = State#publisher.audio_count div (32*2),
   % ?D({a, DTS, StreamDelta, AbsDelta, AbsDelta - StreamDelta}),
   {noreply, State1#publisher{audio_count = AudioCount}};
 
