@@ -32,7 +32,7 @@ publish(URL, Options) ->
 
 
 init([URL, Options]) ->
-  {ok, UVC} = uvc4erl:capture([{format,yuv},{consumer,self()}|Options]),
+  {ok, UVC} = uvc:capture([{format,yuv},{consumer,self()}|Options]),
   % UVC = undefined,
   
   {W,H} = proplists:get_value(size, Options),
@@ -60,7 +60,7 @@ init([URL, Options]) ->
   
   send_frame(RTMP, Stream, AConfig),
   
-  {ok, X264, VConfig} = x264:init_x264([{width,W},{height,H},{config,"h264/priv/encoder.preset"},{annexb,false}]),
+  {ok, X264, VConfig} = x264:init([{width,W},{height,H},{config,"h264/encoder.preset"},{annexb,false}]),
   send_frame(RTMP, Stream, VConfig),
   
   
@@ -83,7 +83,7 @@ drop() ->
 
 drop(Count) ->
   receive
-    {uvc4erl, _UVC, _Codec, _PTS, _Jpeg} -> drop(Count + 1)
+    {uvc, _UVC, _Codec, _PTS, _Jpeg} -> drop(Count + 1)
   after
     0 -> Count
   end.
@@ -126,13 +126,13 @@ enqueue(#video_frame{} = Frame, #publisher{buffer = Buf1, rtmp = RTMP, stream = 
   end,
   State#publisher{buffer = Buf3}.
 
-% handle_info({uvc4erl, UVC, Codec, PTS1, RAW}, #publisher{base_vpts = undefined} = State) ->
-%   handle_info({uvc4erl, UVC, Codec, 0, RAW}, State#publisher{base_vpts = PTS1});
+% handle_info({uvc, UVC, Codec, PTS1, RAW}, #publisher{base_vpts = undefined} = State) ->
+%   handle_info({uvc, UVC, Codec, 0, RAW}, State#publisher{base_vpts = PTS1});
 % 
-% handle_info({uvc4erl, UVC, Codec, PTS1, RAW}, State) ->
+% handle_info({uvc, UVC, Codec, PTS1, RAW}, State) ->
 %   {noreply, State};
 
-handle_info({uvc4erl, _UVC, yuv, _PTS1, YUV}, State) ->
+handle_info({uvc, _UVC, yuv, _PTS1, YUV}, State) ->
   Drop = drop(),
   if
     Drop > 0 -> error_logger:warning_msg("Drop ~p frames in publisher~n", [Drop]);
