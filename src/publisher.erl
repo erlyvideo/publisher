@@ -18,6 +18,7 @@
   width,
   height,
   rtmp,
+  socket,
   start,
   stream,
   buffer = [],
@@ -34,6 +35,8 @@ publish(URL, Options) ->
 init([URL, Options]) ->
   {ok, UVC} = uvc:capture([{format,yuv},{consumer,self()}|Options]),
   % UVC = undefined,
+
+  put(uvc_debug, proplists:get_value(debug, Options)),
   
   {W,H} = proplists:get_value(size, Options),
   {ok, RTMP} = rtmp_socket:connect(URL),
@@ -44,6 +47,7 @@ init([URL, Options]) ->
       Stream1 = rtmp_lib:createStream(RTMP),
       {rtmp, _UserInfo, _Host, _Port, [$/ | Path], _Query} = http_uri2:parse(URL),
       rtmp_lib:publish(RTMP, Stream1, Path),
+      rtmp_socket:setopts(RTMP, [{chunk_size, 16#200000}]),
       Stream1
   after
     1000 ->
@@ -53,16 +57,18 @@ init([URL, Options]) ->
   SampleRate = 32000,
   Channels = 2,
   % {ok, Capture} = audiocapture:start(SampleRate, Channels),
-  Capture = open_port({spawn, "arecord --disable-resample -c 2 -D default:CARD=U0x46d0x821 -r 32000 -f S16_LE"}, [stream, binary]),
+  Arecord = proplists:get_value(arecord, Options),
+  Capture = open_port({spawn, "arecord --disable-resample -c 2 -D " ++ Arecord ++ " -r 32000 -f S16_LE"}, [stream, binary]),
   put(pcm_buf, <<>>),
   put(pcm_dts, 0),
   {ok, AACEnc, AConfig} = faac:init([{sample_rate,SampleRate},{channels,Channels}]),
   
-  send_frame(RTMP, Stream, AConfig),
+  {rtmp, Socket} = rtmp_socket:get_socket(RTMP),
+  
+  send_frame(Socket, Stream, AConfig),
   
   {ok, X264, VConfig} = x264:init([{width,W},{height,H},{config,"h264/encoder.preset"},{annexb,false}]),
-  send_frame(RTMP, Stream, VConfig),
-  
+  send_frame(Socket, Stream, VConfig),
   
   {ok, #publisher{
     url = URL,
@@ -73,6 +79,7 @@ init([URL, Options]) ->
     width = W,
     height = H,
     rtmp = RTMP,
+    socket = Socket,
     x264 = X264,
     stream = Stream,
     start = erlang:now()
@@ -89,22 +96,24 @@ drop(Count) ->
   end.
 
 
-channel_id(#video_frame{content = metadata}) -> 4;
-channel_id(#video_frame{content = audio}) -> 5;
-channel_id(#video_frame{content = video}) -> 6.
+% channel_id(#video_frame{content = metadata}) -> 4;
+% channel_id(#video_frame{content = audio}) -> 5;
+% channel_id(#video_frame{content = video}) -> 6.
+% 
+% 
+% rtmp_message(#video_frame{dts = DTS, content = Type} = Frame, StreamId) ->
+%   #rtmp_message{
+%     channel_id = channel_id(Frame), 
+%     timestamp = DTS,
+%     type = Type,
+%     stream_id = StreamId,
+%     body = flv_video_frame:encode(Frame)}.
 
-
-rtmp_message(#video_frame{dts = DTS, content = Type} = Frame, StreamId) ->
-  #rtmp_message{
-    channel_id = channel_id(Frame), 
-    timestamp = DTS,
-    type = Type,
-    stream_id = StreamId,
-    body = flv_video_frame:encode(Frame)}.
-
-send_frame(RTMP, Stream, Frame) ->
-  Message = rtmp_message(Frame, Stream),
-	rtmp_socket:send(RTMP, Message).
+send_frame(Socket, Stream, #video_frame{} = Frame) ->
+  FlvFrameGen = flv:rtmp_tag_generator(Frame),
+  gen_tcp:send(Socket, FlvFrameGen(0, Stream)).
+  %   Message = rtmp_message(Frame, Stream),
+  % rtmp_socket:send(RTMP, Message).
 
 handle_call(Call, _From, State) ->
   {stop, {unknown_call, Call}, State}.
@@ -114,12 +123,15 @@ handle_cast(Cast, State) ->
   
 
 
-enqueue(#video_frame{} = Frame, #publisher{buffer = Buf1, rtmp = RTMP, stream = Stream} = State) ->
+enqueue(#video_frame{} = Frame, #publisher{buffer = Buf1, socket = Socket, rtmp = _RTMP, stream = Stream} = State) ->
   Buf2 = lists:keysort(#video_frame.dts, [Frame|Buf1]),
   Buf3 = case Buf2 of
     [F1|Frames] when length(Frames) >= 6 ->
-      io:format("~4s ~8B ~8B~n", [F1#video_frame.codec, F1#video_frame.dts, timer:now_diff(erlang:now(), State#publisher.start) div 1000]),
-      send_frame(RTMP, Stream, F1),
+      case get(uvc_debug) of
+        true -> io:format("~4s ~8B ~8B~n", [F1#video_frame.codec, F1#video_frame.dts, timer:now_diff(erlang:now(), State#publisher.start) div 1000]);
+        _ -> ok
+      end,
+      send_frame(Socket, Stream, F1),
       Frames;
     _ ->
       Buf2
