@@ -18,11 +18,13 @@ main([]) ->
   application:start(rtmp),
   application:start(publisher),
   io:format("Starting~n"),
-  Size = {640,360},
+  %Size = {640,360},
   %Size = {960,540},
-  %Size = {1280,720},
+  Size = {1280,720},
   FPS = 20,
-  {ok, Publisher} = publisher:publish("rtmp://192.168.0.103/cam5", [{device,0},{debug,false},{size,Size},{fps,FPS},{arecord,"default:CARD=U0x46d0x823"}]),
+  %RTMP = "rtmp://192.168.0.103/cam5",
+  RTMP = "rtmp://127.0.0.1/cam5",
+  {ok, Publisher} = publisher:publish(RTMP, [{device,0},{debug,false},{size,Size},{fps,FPS},{arecord,"default:CARD=U0x46d0x823"}]),
   receive
     stop -> ok
   end,
