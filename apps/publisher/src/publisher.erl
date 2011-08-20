@@ -42,14 +42,8 @@ run() ->
   application:start(publisher),
   io:format("Starting~n"),
   {ok, Config, _Path} = file:path_consult(["."], "publisher.conf"),
-  Size = proplists:get_value(size, Config, {640,360}),
-  FPS = proplists:get_value(fps, Config, 20),
   RTMP = proplists:get_value(rtmp, Config, "rtmp://127.0.0.1/cam5"),
-  ASound = proplists:get_value(asound, Config),
-  H264Config = proplists:get_value(h264_config, Config),
-  Device = proplists:get_value(device, Config, 0),
-  Debug = proplists:get_value(debug, Config, false),
-  {ok, Publisher} = publisher:publish(RTMP, [{device,Device},{debug,Debug},{size,Size},{fps,FPS},{arecord,ASound},{h264_config,H264Config}]),
+  {ok, Publisher} = publisher:publish(RTMP, Config),
   {ok, Publisher}.
 
 publish(URL, Options) ->
@@ -121,7 +115,7 @@ init([URL, Options]) ->
   
   SampleRate = 32000,
   Channels = 2,
-  Arecord = proplists:get_value(arecord, Options),
+  Arecord = proplists:get_value(asound, Options),
   %{ok, Capture} = alsa:start(SampleRate, Channels),
   Capture = open_port({spawn, "arecord --disable-resample -c 2 -D " ++ Arecord ++ " -r 32000 -f S16_LE"}, [stream, binary]),
   put(pcm_buf, <<>>),
@@ -135,7 +129,7 @@ init([URL, Options]) ->
   send_frame(Socket, Stream, AConfig),
   
   H264Config = proplists:get_value(h264_config, Options, "h264/encoder.preset"),
-  X264Options = [{width,W},{height,H},{preset,"faster"},{tune,"animation"},{config,H264Config},{annexb,false}],
+  X264Options = [{width,W},{height,H},{config,H264Config},{annexb,false}|Options],
   {ok, X264, VConfig} = proc_lib:start_link(?MODULE, x264_helper, [self(), X264Options]),
   send_frame(Socket, Stream, VConfig),
   
