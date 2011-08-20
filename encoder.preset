@@ -1,0 +1,18 @@
+#x264 options
+me umh
+subq 9
+me-range 20
+keyint 50
+qpmin 10
+qpmax 51
+frameref 6
+weightp 2
+bframes 2
+bitrate 500
+fps 20
+vbv-maxrate 1000
+vbv-bufsize 2048
+threads 4
+trellis 2
+rc-lookahead 20
+

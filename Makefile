@@ -2,7 +2,13 @@
 all: compile
 
 
-compile:
-	rm -f ._rebar.config
-	rebar compile
+compile: 
+	find . -name '._*' -delete
+	./rebar compile
+
+clean:
+	./rebar clean
+
+get-deps:
+	./rebar get-deps
 
