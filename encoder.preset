@@ -1,18 +1,18 @@
-me dia
+me hex
 8x8dct true
-subq 9
-me-range 25
+subq 5
+me-range 15
 keyint 150
-qpmin 25
+qpmin 20
 qpmax 51
 frameref 6
 weightp 2
 bframes 4
-bitrate 500
+bitrate 1000
 fps 20
 vbv-maxrate 1000
 vbv-bufsize 2048
-threads 6
+threads 4
 trellis 2
 rc-lookahead 20
 
