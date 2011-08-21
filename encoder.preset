@@ -1,12 +1,12 @@
 me hex
-8x8dct true
-subq 5
-me-range 15
+direct auto
+weightp 1
+subme 3
+merange 15
 keyint 150
 qpmin 20
 qpmax 51
 frameref 6
-weightp 2
 bframes 4
 bitrate 1000
 fps 20
