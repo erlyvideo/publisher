@@ -217,8 +217,8 @@ try_flush([F1|F2] = Frames, ToSend) ->
   HasVideo = lists:member(video, Contents),
   HasAudio = lists:member(audio, Contents),
   if
-    HasVideo andalso HasAudio -> {F2, [F1|ToSend]};
-    true -> {Frames, ToSend}
+    HasVideo andalso HasAudio -> try_flush(F2, [F1|ToSend]);
+    true -> {Frames, lists:reverse(ToSend)}
   end.
   
 
@@ -275,6 +275,10 @@ handle_info({rtmp, _RTMP, #rtmp_message{type = ack_read}}, State) ->
 
 handle_info({rtmp, _, _} = Msg, State) ->
   io:format("rtmp: ~p~n", [Msg]),
+  {noreply, State};
+
+handle_info(status, #publisher{buffer = Buf} = State) ->
+  io:format("buffer: ~p, ~p~n", [length(Buf), [{C,D,size(B)} || #video_frame{codec = C, dts = D, body = B} <- Buf]]),
   {noreply, State};
 
 handle_info(Else, State) ->

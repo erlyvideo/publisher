@@ -1,0 +1,3 @@
+#!/bin/sh
+
+erl -pa apps/publisher/ebin +K true +A 4 +a 4096 -s publisher run -detached -noshell
