@@ -1,10 +1,10 @@
-
 -module(publisher_sup).
 
 -behaviour(supervisor).
 
 %% API
 -export([start_link/0]).
+-export([start_publisher/2, start_listener/2]).
 
 %% Supervisor callbacks
 -export([init/1]).
@@ -18,6 +18,19 @@
 
 start_link() ->
     supervisor:start_link({local, ?MODULE}, ?MODULE, []).
+
+start_publisher(URL, Options) ->
+  Name = list_to_atom("publisher_"++URL),
+  supervisor:start_child(?MODULE, {Name, 
+    {publisher, start_link, [URL, Options]},
+    permanent,
+    10000,
+    worker,
+    [publisher]
+  }).
+
+start_listener(Listen, Options) ->
+  rtmp_socket:start_server(Listen, publish_listener1, publish_listener, [Options]).
 
 %% ===================================================================
 %% Supervisor callbacks
