@@ -1,0 +1,18 @@
+me hex
+direct auto
+weightp 1
+subme 3
+merange 15
+keyint 150
+qpmin 22
+qpmax 51
+frameref 6
+bframes 5
+bitrate 700
+fps 20
+vbv-maxrate 1000
+vbv-bufsize 2048
+threads 4
+trellis 2
+rc-lookahead 20
+
