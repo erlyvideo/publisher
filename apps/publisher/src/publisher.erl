@@ -8,7 +8,7 @@
 -export([publish/2, listen/2, run/0]).
 -export([start_link/2]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
-
+-export([send_frame/3]).
 
 -record(publisher, {
   url,
@@ -24,9 +24,7 @@ run() ->
   code:add_pathz("deps/alsa/ebin"),
   code:add_pathz("deps/jpeg/ebin"),
   code:add_pathz("deps/h264/ebin"),
-  code:add_pathz("../erlyvideo/apps/rtmp/ebin"),
-  code:add_pathz("../erlyvideo/apps/erlmedia/ebin"),
-  code:add_pathz("../erlyvideo/apps/amf/ebin"),
+  [code:add_pathz(P) || P <- filelib:wildcard("../erlyvideo/apps/*/ebin")],
   [code:add_pathz(P) || P <- filelib:wildcard("/opt/erlyvideo/lib/*/ebin")],
   application:start(rtmp),
   application:start(publisher),
@@ -82,25 +80,28 @@ init([URL, Options]) ->
   }}.
 
 
-% channel_id(#video_frame{content = metadata}) -> 4;
-% channel_id(#video_frame{content = audio}) -> 5;
-% channel_id(#video_frame{content = video}) -> 6.
-% 
-% 
-% rtmp_message(#video_frame{dts = DTS, content = Type} = Frame, StreamId) ->
-%   #rtmp_message{
-%     channel_id = channel_id(Frame), 
-%     timestamp = DTS,
-%     type = Type,
-%     stream_id = StreamId,
-%     body = flv_video_frame:encode(Frame)}.
+channel_id(#video_frame{content = metadata}) -> 4;
+channel_id(#video_frame{content = audio}) -> 5;
+channel_id(#video_frame{content = video}) -> 6.
 
-send_frame(Socket, Stream, #video_frame{} = Frame) ->
+
+rtmp_message(#video_frame{dts = DTS, content = Type} = Frame, StreamId) ->
+  #rtmp_message{
+    channel_id = channel_id(Frame), 
+    timestamp = DTS,
+    type = Type,
+    stream_id = StreamId,
+    body = flv_video_frame:encode(Frame)}.
+
+send_frame(Socket, Stream, #video_frame{} = Frame) when is_port(Socket) ->
   FlvFrameGen = flv:rtmp_tag_generator(Frame),
   gen_tcp:send(Socket, FlvFrameGen(0, Stream)),
-  %   Message = rtmp_message(Frame, Stream),
-  % rtmp_socket:send(RTMP, Message).
-  ok.
+  ok;
+
+send_frame(RTMP, Stream, #video_frame{} = Frame) when is_pid(RTMP) ->
+  Message = rtmp_message(Frame, Stream),
+  rtmp_socket:send(RTMP, Message).
+  
 
 handle_call(Call, _From, State) ->
   {stop, {unknown_call, Call}, State}.

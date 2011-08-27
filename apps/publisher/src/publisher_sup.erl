@@ -30,6 +30,7 @@ start_publisher(URL, Options) ->
   }).
 
 start_listener(Listen, Options) ->
+  io:format("Start listener ~p~n", [Listen]),
   rtmp_socket:start_server(Listen, publish_listener1, publish_listener, [Options]).
 
 %% ===================================================================
