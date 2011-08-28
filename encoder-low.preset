@@ -6,8 +6,8 @@ merange 15
 keyint 150
 qpmin 22
 qpmax 51
-frameref 6
-bframes 5
+frameref 4
+bframes 3
 bitrate 700
 fps 20
 vbv-maxrate 1000
