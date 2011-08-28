@@ -5,16 +5,8 @@
 
 -define(D(X), io:format("~p:~p ~p~n", [?MODULE, ?LINE, X])).
 
--export([publish/2, listen/2, run/0]).
+-export([publish/2, listen/2, encode/2, run/0]).
 -export([start_link/2]).
-
--record(publisher, {
-  url,
-  rtmp,
-  socket,
-  stream,
-  encoder
-}).
 
 run() ->
   os:putenv("LD_LIBRARY_PATH", "deps/h264/priv"),
@@ -28,19 +20,25 @@ run() ->
   application:start(publisher),
   io:format("Starting~n"),
   {ok, Config, _Path} = file:path_consult(["."], "publisher.conf"),
+  
+  publisher:encode(encoder1, Config),
+  
   case proplists:get_value(publish, Config) of
     undefined -> io:format("Publish disabled~n");
-    RTMP -> publisher:publish(RTMP, Config)
+    RTMP -> publisher:publish(RTMP, [{encoder,encoder1}|Config])
   end,
   case proplists:get_value(listen, Config) of
     undefined -> io:format("Listen disabled~n");
-    Listen -> publisher:listen(Listen, Config)
+    Listen -> publisher:listen(Listen, [{encoder,encoder1}|Config])
   end,
   {ok, erlang:whereis(publisher_sup)}.
 
+
+encode(Name, Options) ->
+  publisher_sup:start_encoder(Name, Options).
+
 publish(URL, Options) ->
   publisher_sup:start_publisher(URL, Options).
-
 
 listen(Listen, Options) ->
   publisher_sup:start_listener(Listen, Options).

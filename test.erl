@@ -1,5 +1,5 @@
 #!/usr/bin/env escript
-%%! +A 4 +a 4096
+%%! -boot start_sasl +A 4 +a 4096
 
 % -include_lib("erlmedia/include/video_frame.hrl").
 

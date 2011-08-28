@@ -6,16 +6,16 @@
 
 
 %% External API
--export([start_link/2]).
+-export([start_link/1, start_link/2]).
 -export([x264_helper/2, faac_helper/2]).
--export([status/1]).
+-export([status/1, subscribe/1]).
 
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
 -record(encoder, {
-  consumer,
+  clients = [],
   options,
   uvc,
   x264,
@@ -27,19 +27,28 @@
   start,
   stream,
   buffer = [],
+  aconfig,
+  vconfig,
+  last_dts,
   audio_count = 0,
   video_count = 0
 }).
 
 
-start_link(Consumer, Options) ->
-  gen_server:start_link(?MODULE, [Consumer, Options], []).
+start_link(Options) ->
+  gen_server:start_link(?MODULE, [Options], []).
+
+start_link(Name, Options) ->
+  gen_server:start_link({local, Name}, ?MODULE, [Options], []).
 
 status(Encoder) ->
   gen_server:call(Encoder, status).
+  
+subscribe(Encoder) ->
+  erlang:monitor(process, Encoder),
+  gen_server:call(Encoder, {subscribe, self()}).
 
-init([Consumer, Options]) ->
-  erlang:monitor(process, Consumer),
+init([Options]) ->
   
   {ok, UVC} = uvc:capture([{format,yuv},{consumer,self()}|Options]),
   % UVC = undefined,
@@ -56,20 +65,18 @@ init([Consumer, Options]) ->
   AACOptions = [{sample_rate,SampleRate},{channels,Channels}],
   {ok, AACEnc, AConfig} = proc_lib:start_link(?MODULE, faac_helper, [self(), AACOptions]),
   
-  Consumer ! AConfig,
-  
   {W,H} = proplists:get_value(size, Options),
   H264Config = proplists:get_value(h264_config, Options, "h264/encoder.preset"),
   X264Options = [{width,W},{height,H},{config,H264Config},{annexb,false}|Options],
   {ok, X264, VConfig} = proc_lib:start_link(?MODULE, x264_helper, [self(), X264Options]),
   
-  Consumer ! VConfig,
-  
   {ok, #encoder{
-    consumer = Consumer,
     options = Options,
     uvc = UVC,
     audio = Capture,
+    aconfig = AConfig,
+    vconfig = VConfig,
+    last_dts = 0,
     faac = AACEnc,
     width = W,
     height = H,
@@ -86,6 +93,9 @@ x264_helper(Master, Options) ->
 
 x264_loop(Master, X264) ->
   receive
+    keyframe ->
+      x264_loop(Master, X264);
+      
     {yuv, YUV, PTS} ->
       drop(),
       case x264:encode(X264, YUV, PTS) of
@@ -102,6 +112,7 @@ faac_helper(Master, Options) ->
   {ok, AACEnc, AConfig} = faac:init(Options),
   erlang:monitor(process, Master),
   proc_lib:init_ack({ok, self(), AConfig}),
+  put(prev_pts, 0),
   faac_loop(Master, AACEnc).
 
 
@@ -110,7 +121,13 @@ faac_loop(Master, AAC) ->
     {alsa, PCM, PTS} ->
       case faac:encode(AAC, PCM) of
         undefined -> ok;
-        #video_frame{} = AFrame -> Master ! AFrame#video_frame{dts = PTS, pts = PTS}
+        #video_frame{} = AFrame ->
+          PrevPts = get(prev_pts),
+          if PrevPts > PTS -> io:format("Damn! backjump of audio ~p ~p ~n", [get(prev_pts), PTS]);
+            true -> ok
+          end,
+          put(prev_pts, PTS),
+          Master ! AFrame#video_frame{dts = PTS, pts = PTS}
       end,
       faac_loop(Master, AAC);
     Else ->
@@ -148,10 +165,19 @@ drop(Limit, Count) ->
 
 handle_call(status, _From, #encoder{buffer = Buf, start = Start} = State) ->
   Status = [
+    {buffer, [{C,D} || #video_frame{codec = C, dts = D} <- Buf]},
     {buffered_frames, length(Buf)},
     {abs_delta, timer:now_diff(erlang:now(), Start) div 1000}
   ],
   {reply, Status, State};
+
+handle_call({subscribe, Client}, _From, #encoder{clients = Clients, aconfig = AConfig, vconfig = VConfig, x264 = X264, last_dts = DTS} = State) ->
+  Client ! AConfig#video_frame{dts = DTS, pts = DTS},
+  Client ! VConfig#video_frame{dts = DTS, pts = DTS},
+  X264 ! keyframe,
+  erlang:monitor(process, Client),
+  {reply, ok, State#encoder{clients = [Client|Clients]}};
+  
 
 handle_call(Request, _From, State) ->
   {stop, {unknown_call, Request}, State}.
@@ -160,8 +186,16 @@ handle_cast(_Msg, State) ->
   {stop, {unknown_cast, _Msg}, State}.
 
 
+-define(THRESHOLD, 10000).
+check_frame_delay(#video_frame{dts = DTS} = Frame, Frames) ->
+  case [true || #video_frame{dts = D} <- Frames, abs(D - DTS) > ?THRESHOLD] of
+    [] -> true;
+    _ ->
+      io:format("Frame ~p delayed: ~p~n", [Frame, [{C,D} || #video_frame{codec = C, dts = D} <- Frames]]),
+      false
+  end.
 
-enqueue(#video_frame{} = Frame, #encoder{buffer = Buf1, consumer = Consumer, start = Start} = State) ->
+enqueue(#video_frame{} = Frame, #encoder{buffer = Buf1, clients = Clients, start = Start} = State) ->
   Buf2 = lists:keysort(#video_frame.dts, [Frame|Buf1]),
   AbsDelta = timer:now_diff(erlang:now(), Start) div 1000,
   {Buf3, ToSend} = try_flush(Buf2, []),
@@ -171,7 +205,7 @@ enqueue(#video_frame{} = Frame, #encoder{buffer = Buf1, consumer = Consumer, sta
         io:format("~4s ~8B ~8B ~8B ~8B~n", [F1#video_frame.codec, F1#video_frame.dts, F1#video_frame.pts, AbsDelta, AbsDelta - F1#video_frame.dts]);
       _ -> ok
     end,
-    Consumer ! F1
+    [Client ! F1 || Client <- Clients]
   end, ToSend),
   State#encoder{buffer = Buf3}.
 
@@ -203,7 +237,10 @@ handle_info({uvc, _UVC, yuv, PTS1, YUV}, State) ->
   handle_info({yuv, YUV, PTS}, State);
 
 handle_info(#video_frame{} = Frame, #encoder{} = State) ->
-  {noreply, enqueue(Frame, State)};
+  case check_frame_delay(Frame, State#encoder.buffer) of
+    true -> {noreply, enqueue(Frame, State)};
+    false -> {noreply, State}
+  end;
 
 handle_info({yuv, YUV, PTS}, #encoder{x264 = X264} = State) ->
   X264 ! {yuv, YUV, PTS},
@@ -227,14 +264,15 @@ handle_info({Capture, {data, Raw}}, State) ->
 handle_info({alsa, _Capture, DTS, PCM}, #encoder{faac = AACEnc} = State) ->
   AACEnc ! {alsa, PCM, DTS},
 
-  AudioCount = State#encoder.audio_count + (size(PCM) div 2),
+  % AudioCount = State#encoder.audio_count + (size(PCM) div 2),
   % AbsDelta = timer:now_diff(erlang:now(),State#encoder.start) div 1000,
   % StreamDelta = State#encoder.audio_count div (32*2),
   % ?D({a, DTS, StreamDelta, AbsDelta, AbsDelta - StreamDelta}),
+  AudioCount = State#encoder.audio_count + 1,
   {noreply, State#encoder{audio_count = AudioCount}};
 
-handle_info({'DOWN', _, process, _Client, _Reason}, Server) ->
-  {stop, normal, Server};
+handle_info({'DOWN', _, process, Client, _Reason}, #encoder{clients = Clients} = Server) ->
+  {noreply, Server#encoder{clients = lists:delete(Client, Clients)}};
 
 handle_info(_Info, State) ->
   {stop, {unknown_message, _Info}, State}.

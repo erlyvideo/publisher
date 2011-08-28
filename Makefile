@@ -18,3 +18,7 @@ start:
 
 attach:
 	/opt/erlyvideo/erts-5.8.4/bin/to_erl /tmp/
+
+
+.PHONY: start attach
+

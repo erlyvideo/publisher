@@ -4,7 +4,7 @@
 
 %% API
 -export([start_link/0]).
--export([start_publisher/2, start_listener/2]).
+-export([start_publisher/2, start_listener/2, start_encoder/2]).
 
 %% Supervisor callbacks
 -export([init/1]).
@@ -32,6 +32,17 @@ start_publisher(URL, Options) ->
 start_listener(Listen, Options) ->
   io:format("Start listener ~p~n", [Listen]),
   rtmp_socket:start_server(Listen, publish_listener1, publish_listener, [Options]).
+
+
+start_encoder(Name, Options) ->
+  Sup = list_to_atom(atom_to_list(Name) ++ "_sup"),
+  supervisor:start_child(?MODULE, {Sup,
+    {publish_encoder, start_link, [Name, Options]},
+    permanent,
+    10000,
+    worker,
+    [publish_encoder]
+  }).
 
 %% ===================================================================
 %% Supervisor callbacks

@@ -59,7 +59,8 @@ init_active(URL, Options) ->
   end,
   {rtmp, Socket} = rtmp_socket:get_socket(RTMP),
   inet:setopts(Socket, [{sndbuf,1024*1024}]),
-  {ok, Encoder} = publish_encoder:start_link(self(), Options),
+  Encoder = proplists:get_value(encoder, Options),
+  publish_encoder:subscribe(Encoder),
   #publisher{
     url = URL,
     rtmp = RTMP,
@@ -120,7 +121,14 @@ handle_info(dump_status, #publisher{encoder = Encoder, last_dts = LastDTS} = Sta
   EncStatus = publish_encoder:status(Encoder),
   BufferedFrames = proplists:get_value(buffered_frames, EncStatus),
   AbsDelta = proplists:get_value(abs_delta, EncStatus),
-  error_logger:info_msg("buffered:~p last_dts:~p abs_delta:~p delay:~p~n", [BufferedFrames, LastDTS, AbsDelta, AbsDelta - LastDTS]),
+  BufInfo = case proplists:get_value(buffer, EncStatus) of
+    L when length(L) >= 2 ->
+      {_,L1} = lists:nth(1, L),
+      {_,L2} = lists:nth(length(L), L),
+      [L1,L2, {delta,L2-L1},{frames, round((L2-L1)*32 / 1024)}];
+    L -> L
+  end,
+  error_logger:info_msg("buffered:~p(~p) last_dts:~p abs_delta:~p delay:~p~n", [BufferedFrames, BufInfo, LastDTS, AbsDelta, AbsDelta - LastDTS]),
   {noreply, State};
 
 handle_info(Msg, State) ->
@@ -148,7 +156,8 @@ handle_invoke(#rtmp_funcall{command = <<"createStream">>} = AMF, #publisher{rtmp
 
 handle_invoke(#rtmp_funcall{command = <<"play">>, stream_id = StreamId} = _AMF, #publisher{rtmp = RTMP, options = Options} = State) ->
   rtmp_lib:play_start(RTMP, StreamId, 0, live),
-  {ok, Encoder} = publish_encoder:start_link(self(), Options),
+  Encoder = proplists:get_value(encoder, Options),
+  publish_encoder:subscribe(Encoder),
   {noreply, State#publisher{encoder = Encoder}};
 
 handle_invoke(#rtmp_funcall{command = <<"onStatus">>}, #publisher{} = State) ->
