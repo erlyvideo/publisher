@@ -115,24 +115,29 @@ faac_loop(Master, AAC) ->
 
 
 drop() ->
-  % {message_queue_len,Len} = process_info(self(), message_queue_len),
-  % if
-  %   Len > 10 -> drop(0);
-  %   true -> 0
-  % end.
-  drop(0).
+  {message_queue_len,Len} = process_info(self(), message_queue_len),
+  Count = if
+    Len > 100 -> drop(all, 0);
+    Len > 30 -> drop(3, 0);
+    Len > 10 -> drop(1, 0);
+    true -> 0
+  end,
+  if
+    Count > 0 -> error_logger:warning_msg("Drop ~p frames in publisher~n", [Count]);
+    true -> ok
+  end.
+  
 
 
-drop(Count) ->
+drop(Limit, Count) when is_number(Limit) andalso is_number(Count) andalso Count >= Limit ->
+  Count;
+
+drop(Limit, Count) ->
   receive
-    {uvc, _UVC, _Codec, _PTS, _Jpeg} -> drop(Count + 1);
-    {yuv, _YUV, _PTS} -> drop(Count + 1)
+    {uvc, _UVC, _Codec, _PTS, _Jpeg} -> drop(Limit, Count + 1);
+    {yuv, _YUV, _PTS} -> drop(Limit, Count + 1)
   after
-    0 -> 
-      if
-        Count > 0 -> error_logger:warning_msg("Drop ~p frames in publisher~n", [Count]);
-        true -> ok
-      end
+    0 -> Count
   end.
 
   
