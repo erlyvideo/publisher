@@ -8,6 +8,7 @@
 %% External API
 -export([start_link/2]).
 -export([x264_helper/2, faac_helper/2]).
+-export([status/1]).
 
 
 %% gen_server callbacks
@@ -34,6 +35,9 @@
 start_link(Consumer, Options) ->
   gen_server:start_link(?MODULE, [Consumer, Options], []).
 
+status(Encoder) ->
+  gen_server:call(Encoder, status).
+
 init([Consumer, Options]) ->
   erlang:monitor(process, Consumer),
   
@@ -44,8 +48,8 @@ init([Consumer, Options]) ->
   
   SampleRate = 32000,
   Channels = 2,
-  Arecord = proplists:get_value(asound, Options),
   {ok, Capture} = alsa:start(SampleRate, Channels),
+  % Arecord = proplists:get_value(asound, Options),
   % Capture = open_port({spawn, "arecord --disable-resample -c 2 -D " ++ Arecord ++ " -r 32000 -f S16_LE"}, [stream, binary]),
   put(pcm_buf, <<>>),
   put(pcm_dts, 0),
@@ -140,7 +144,14 @@ drop(Limit, Count) ->
     0 -> Count
   end.
 
-  
+
+
+handle_call(status, _From, #encoder{buffer = Buf, start = Start} = State) ->
+  Status = [
+    {buffered_frames, length(Buf)},
+    {abs_delta, timer:now_diff(erlang:now(), Start) div 1000}
+  ],
+  {reply, Status, State};
 
 handle_call(Request, _From, State) ->
   {stop, {unknown_call, Request}, State}.
