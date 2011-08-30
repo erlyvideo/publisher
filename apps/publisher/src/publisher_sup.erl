@@ -4,7 +4,7 @@
 
 %% API
 -export([start_link/0]).
--export([start_publisher/3, start_listener/2, start_encoder/2]).
+-export([start_publish_reconnector/3, start_listener/2, start_encoder/2, start_publisher/3]).
 
 %% Supervisor callbacks
 -export([init/1]).
@@ -19,14 +19,17 @@
 start_link() ->
     supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
-start_publisher(URL, Name, Options) ->
+start_publish_reconnector(URL, Name, Options) ->
   supervisor:start_child(?MODULE, {Name, 
-    {publisher, start_link, [URL, Options]},
+    {publisher_reconnect, start_link, [URL, Options]},
     permanent,
     10000,
     worker,
     [publisher]
   }).
+
+start_publisher(Type, URL, Options) ->
+  supervisor:start_child(publisher_rtmp_sup, [Type, URL, Options]).
 
 start_listener(Listen, Options) ->
   rtmp_socket:start_server(Listen, publish_listener1, publish_listener, [Options]).
@@ -46,6 +49,26 @@ start_encoder(Name, Options) ->
 %% Supervisor callbacks
 %% ===================================================================
 
+init([publisher_rtmp]) ->
+  {ok, {{simple_one_for_one, 1, 100}, [
+    {undefined,                               % Id       = internal id
+    {publisher_rtmp,start_link,[]},                  % StartFun = {M, F, A}
+    temporary,                               % Restart  = permanent | transient | temporary
+    2000,                                    % Shutdown = brutal_kill | int() >= 0 | infinity
+    worker,                                  % Type     = worker | supervisor
+    []                                       % Modules  = [Module] | dynamic
+    }
+  ]}};
+
 init([]) ->
-  {ok, { {one_for_one, 5, 10}, []} }.
+  Supervisors = [
+  {   publisher_rtmp_sup,
+      {supervisor,start_link,[{local, publisher_rtmp_sup}, ?MODULE, [publisher_rtmp]]},
+      permanent,                               % Restart  = permanent | transient | temporary
+      infinity,                                % Shutdown = brutal_kill | int() >= 0 | infinity
+      supervisor,                              % Type     = worker | supervisor
+      []                                       % Modules  = [Module] | dynamic
+  }
+  ],
+  {ok, { {one_for_one, 5, 10}, Supervisors} }.
 

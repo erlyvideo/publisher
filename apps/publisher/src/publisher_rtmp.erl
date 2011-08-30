@@ -156,7 +156,7 @@ handle_invoke(#rtmp_funcall{command = <<"createStream">>} = AMF, #publisher{rtmp
   rtmp_lib:reply(RTMP, AMF, [Stream]),
   {noreply, State#publisher{stream = Stream}};
 
-handle_invoke(#rtmp_funcall{command = <<"play">>, stream_id = StreamId, args = [null, Camera]} = _AMF, #publisher{rtmp = RTMP} = State) ->
+handle_invoke(#rtmp_funcall{command = <<"play">>, stream_id = StreamId, args = [null, Camera |_]} = _AMF, #publisher{rtmp = RTMP} = State) ->
   rtmp_lib:play_start(RTMP, StreamId, 0, live),
   Encoder = binary_to_existing_atom(Camera, latin1),
   publish_encoder:subscribe(Encoder),

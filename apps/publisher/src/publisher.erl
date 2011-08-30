@@ -6,7 +6,6 @@
 -define(D(X), io:format("~p:~p ~p~n", [?MODULE, ?LINE, X])).
 
 -export([publish/3, listen/2, encode/2, run/0]).
--export([start_link/2]).
 
 run() ->
   os:putenv("LD_LIBRARY_PATH", "deps/h264/priv"),
@@ -54,13 +53,10 @@ encode(Name, Options) ->
   publisher_sup:start_encoder(Name, Options).
 
 publish(URL, Name, Options) ->
-  publisher_sup:start_publisher(URL, Name, Options).
+  publisher_sup:start_publish_reconnector(URL, Name, Options).
 
 listen(Listen, Options) ->
   publisher_sup:start_listener(Listen, Options).
-
-start_link(URL, Options) ->
-  publisher_rtmp:start_link(active, URL, Options).
 
 
 
