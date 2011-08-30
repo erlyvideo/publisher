@@ -46,10 +46,12 @@ init_active(URL, Options) ->
   {ok, RTMP} = rtmp_socket:connect(URL),
   Stream = receive
     {rtmp, RTMP, connected} ->
+      {rtmp, _UserInfo, _Host, _Port, [$/ | FullPath], _Query} = http_uri2:parse(URL),
+      {match, [App | Path]} = re:run(FullPath, "([^\\/]+)/(.*)", [{capture,all_but_first,list}]),
+      
       rtmp_socket:setopts(RTMP, [{active, true}]),
-      rtmp_lib:connect(RTMP, [{app, <<"live">>}, {tcUrl, <<"rtmp://localhost/live/a">>}]),
+      rtmp_lib:connect(RTMP, [{app, list_to_binary(App)}, {tcUrl, <<"rtmp://localhost/live/a">>}]),
       Stream1 = rtmp_lib:createStream(RTMP),
-      {rtmp, _UserInfo, _Host, _Port, [$/ | Path], _Query} = http_uri2:parse(URL),
       rtmp_lib:publish(RTMP, Stream1, Path),
       rtmp_socket:setopts(RTMP, [{chunk_size, 16#200000}]),
       Stream1
@@ -154,9 +156,9 @@ handle_invoke(#rtmp_funcall{command = <<"createStream">>} = AMF, #publisher{rtmp
   rtmp_lib:reply(RTMP, AMF, [Stream]),
   {noreply, State#publisher{stream = Stream}};
 
-handle_invoke(#rtmp_funcall{command = <<"play">>, stream_id = StreamId} = _AMF, #publisher{rtmp = RTMP, options = Options} = State) ->
+handle_invoke(#rtmp_funcall{command = <<"play">>, stream_id = StreamId, args = [null, Camera]} = _AMF, #publisher{rtmp = RTMP} = State) ->
   rtmp_lib:play_start(RTMP, StreamId, 0, live),
-  Encoder = proplists:get_value(encoder, Options),
+  Encoder = binary_to_existing_atom(Camera, latin1),
   publish_encoder:subscribe(Encoder),
   {noreply, State#publisher{encoder = Encoder}};
 

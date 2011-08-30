@@ -5,7 +5,7 @@
 
 -define(D(X), io:format("~p:~p ~p~n", [?MODULE, ?LINE, X])).
 
--export([publish/2, listen/2, encode/2, run/0]).
+-export([publish/3, listen/2, encode/2, run/0]).
 -export([start_link/2]).
 
 run() ->
@@ -16,29 +16,45 @@ run() ->
   code:add_pathz("deps/h264/ebin"),
   [code:add_pathz(P) || P <- filelib:wildcard("../erlyvideo/apps/*/ebin")],
   [code:add_pathz(P) || P <- filelib:wildcard("/opt/erlyvideo/lib/*/ebin")],
+  application:start(sasl),
   application:start(rtmp),
   application:start(publisher),
   io:format("Starting~n"),
   {ok, Config, _Path} = file:path_consult(["."], "publisher.conf"),
   
-  publisher:encode(encoder1, Config),
-  
-  case proplists:get_value(publish, Config) of
-    undefined -> io:format("Publish disabled~n");
-    RTMP -> publisher:publish(RTMP, [{encoder,encoder1}|Config])
-  end,
-  case proplists:get_value(listen, Config) of
-    undefined -> io:format("Listen disabled~n");
-    Listen -> publisher:listen(Listen, [{encoder,encoder1}|Config])
-  end,
+  load_config(Config),
   {ok, erlang:whereis(publisher_sup)}.
+  
+
+
+load_config([{capture, Camera, Options}|Config]) ->
+  publisher:encode(Camera, Options),
+  load_config(Config);
+  
+load_config([{publish, Camera, Publisher, RTMP}|Config]) ->
+  load_config([{publish, Camera, Publisher, RTMP, []}|Config]);
+
+load_config([{publish, Camera, Publisher, RTMP, Options}|Config]) ->
+  publisher:publish(RTMP, Publisher, [{encoder,Camera}|Options]),
+  load_config(Config);
+
+load_config([{listen, Port}|Config]) ->
+  load_config([{listen, Port, []}|Config]);
+
+
+load_config([{listen, Port, Options}|Config]) ->
+  publisher:listen(Port, Options),
+  load_config(Config);
+
+load_config([]) ->
+  ok.
 
 
 encode(Name, Options) ->
   publisher_sup:start_encoder(Name, Options).
 
-publish(URL, Options) ->
-  publisher_sup:start_publisher(URL, Options).
+publish(URL, Name, Options) ->
+  publisher_sup:start_publisher(URL, Name, Options).
 
 listen(Listen, Options) ->
   publisher_sup:start_listener(Listen, Options).

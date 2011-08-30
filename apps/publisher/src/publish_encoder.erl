@@ -49,6 +49,7 @@ subscribe(Encoder) ->
   gen_server:call(Encoder, {subscribe, self()}).
 
 init([Options]) ->
+  process_flag(trap_exit, true),
   
   {ok, UVC} = uvc:capture([{format,yuv},{consumer,self()}|Options]),
   % UVC = undefined,
@@ -277,7 +278,8 @@ handle_info({'DOWN', _, process, Client, _Reason}, #encoder{clients = Clients} =
 handle_info(_Info, State) ->
   {stop, {unknown_message, _Info}, State}.
 
-terminate(_Reason, _State) ->
+terminate(_Reason, #encoder{audio = Alsa}) ->
+  alsa:stop(Alsa),
   ok.
 
 code_change(_OldVsn, State, _Extra) ->
