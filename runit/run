@@ -1,0 +1,7 @@
+#!/bin/sh
+
+cd /root/publisher
+
+export HOME=/root
+exec ./test.erl
+
