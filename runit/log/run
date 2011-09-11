@@ -1,6 +1,0 @@
-#!/bin/sh
-
-mkdir -p /var/log/publisher
-exec svlogd -tt /var/log/publisher
-
-

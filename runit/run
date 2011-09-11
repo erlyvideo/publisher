@@ -1,7 +1,8 @@
 #!/bin/sh
 
-cd /root/publisher
+cd /opt/erlyvideo/lib/publisher-*
+cd priv/
 
 export HOME=/root
-exec ./test.erl
+exec ./publisher.erl
 
