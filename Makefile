@@ -22,8 +22,8 @@ attach:
 
 package: compile
 	rm -rf tmproot
-	mkdir -p tmproot/opt/erlyvideo/lib/publisher-$(VERSION)/
-	cp -r priv ebin tmproot/opt/erlyvideo/lib/publisher-$(VERSION)/
+	mkdir -p tmproot/opt/erlyvideo/lib/publisher-$(VERSION)/priv/
+	cp -r apps/publisher/ebin tmproot/opt/erlyvideo/lib/publisher-$(VERSION)/
 	cp publisher.erl tmproot/opt/erlyvideo/lib/publisher-$(VERSION)/priv/
 	cp -r runit tmproot/opt/erlyvideo/lib/publisher-$(VERSION)/priv/
 	mkdir -p tmproot/etc/service/
