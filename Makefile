@@ -31,6 +31,7 @@ package: compile
 	cd tmproot && \
 	fpm -s dir -t deb -n publisher -d erlyvideo -d erly-h264 -d erly-alsa -d erly-uvc -d erly-jpeg -v $(VERSION) -m "Max Lapshin <max@maxidoors.ru>" opt etc
 	mv tmproot/*.deb .
+	rm -rf tmproot
 
 
 .PHONY: start attach package
