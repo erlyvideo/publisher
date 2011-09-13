@@ -46,11 +46,12 @@ init_active(URL, Options) ->
   {ok, RTMP} = rtmp_socket:connect(URL),
   Stream = receive
     {rtmp, RTMP, connected} ->
-      {rtmp, _UserInfo, _Host, _Port, [$/ | FullPath], _Query} = http_uri2:parse(URL),
+      {rtmp, _UserInfo, Host, _Port, [$/ | FullPath], _Query} = http_uri2:parse(URL),
       {match, [App | Path]} = re:run(FullPath, "([^\\/]+)/(.*)", [{capture,all_but_first,list}]),
       
       rtmp_socket:setopts(RTMP, [{active, true}]),
-      rtmp_lib:connect(RTMP, [{app, list_to_binary(App)}, {tcUrl, <<"rtmp://localhost/live/a">>}]),
+      TcUrl = list_to_binary("rtmp://"++ Host ++"/" ++ App),
+      rtmp_lib:connect(RTMP, [{app, list_to_binary(App)}, {tcUrl, TcUrl}]),
       Stream1 = rtmp_lib:createStream(RTMP),
       rtmp_lib:publish(RTMP, Stream1, Path),
       rtmp_socket:setopts(RTMP, [{chunk_size, 16#200000}]),
