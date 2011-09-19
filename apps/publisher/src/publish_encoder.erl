@@ -3,6 +3,7 @@
 
 -behaviour(gen_server).
 -include_lib("erlmedia/include/video_frame.hrl").
+-include_lib("erlmedia/include/media_info.hrl").
 
 
 %% External API
@@ -63,8 +64,13 @@ init([Options]) ->
     start = erlang:now()
   }}.
 
-
 start_h264_capture(#encoder{options = Options} = Encoder) ->
+  case proplists:get_value(h264_source, Options, uvc) of
+    uvc -> start_uvc_capture(Encoder);
+    {ems, _} -> start_erlyvideo_capture(Encoder)
+  end.
+
+start_uvc_capture(#encoder{options = Options} = Encoder) ->
   {ok, UVC} = uvc:capture([{format,yuv},{consumer,self()}|Options]),
   put(uvc_debug, proplists:get_value(debug, Options)),
   {W,H} = proplists:get_value(size, Options),
@@ -72,7 +78,13 @@ start_h264_capture(#encoder{options = Options} = Encoder) ->
   X264Options = [{width,W},{height,H},{config,H264Config},{annexb,false}|Options],
   {ok, X264, VConfig} = proc_lib:start_link(?MODULE, x264_helper, [self(), X264Options]),
   Encoder#encoder{uvc = UVC, vconfig = VConfig, width = W, height = H, x264 = X264}.
-  
+
+
+start_erlyvideo_capture(#encoder{options = Options} = Encoder) ->
+  {ems, {URL, Type, Args}} = proplists:get_value(h264_source, Options),
+  {ok, Media} = ems_media:start_link(Type, [{url,URL}|Args]),
+  #media_info{video = [#stream_info{config = VConfig}]} = ems_media:media_info(Media),
+  Encoder#encoder{vconfig = VConfig, x264 = Media}.
 
 start_aac_capture(#encoder{options = Options} = Encoder) ->
   SampleRate = proplists:get_value(sample_rate, Options, 32000),
