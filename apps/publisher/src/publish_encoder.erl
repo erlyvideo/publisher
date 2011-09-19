@@ -70,7 +70,7 @@ start_h264_capture(#encoder{options = Options} = Encoder) ->
   
   case proplists:get_value(type, VideoOptions, uvc) of
     uvc -> start_uvc_capture(Encoder, VideoOptions);
-    ems -> start_erlyvideo_capture(Encoder, VideoOptions)
+    rtsp -> start_rtsp_capture(Encoder, VideoOptions)
   end.
 
 start_uvc_capture(#encoder{} = Encoder, VideoOptions) ->
@@ -82,21 +82,19 @@ start_uvc_capture(#encoder{} = Encoder, VideoOptions) ->
   Encoder#encoder{uvc = UVC, vconfig = VConfig, width = W, height = H, x264 = X264}.
 
 
-start_erlyvideo_capture(#encoder{} = Encoder, VideoOptions) ->
-  % ems_sup:start_link(),
+start_rtsp_capture(#encoder{} = Encoder, VideoOptions) ->
   application:start(log4erl),
   ems_log:start(),
   application:start(rtsp),
-  Type = proplists:get_value(subtype, VideoOptions),
   {ok, RTSP, MediaInfo} = rtsp_socket:read(proplists:get_value(url,VideoOptions), [{consumer,self()}]),
   % {ok, Media} = ems_media:start_link(Type, VideoOptions),
   % #media_info{video = VideoInfo} = ems_media:media_info(Media),
   #media_info{video = VideoInfo} = MediaInfo,
   length(VideoInfo) == 1 orelse erlang:error(invalid_video_stream),
-  [#stream_info{config = VConfig}] = VideoInfo,
+  [#stream_info{} = VideoStream] = VideoInfo,
   erlang:monitor(process, RTSP),
   % ems_media:play(Media, []),
-  Encoder#encoder{vconfig = VConfig}.
+  Encoder#encoder{vconfig = video_frame:config_frame(VideoStream)}.
 
 start_aac_capture(#encoder{options = Options} = Encoder) ->
   case proplists:get_value(audio_capture, Options) of
@@ -201,8 +199,8 @@ handle_call(status, _From, #encoder{buffer = Buf, start = Start} = State) ->
   {reply, Status, State};
 
 handle_call({subscribe, Client}, _From, #encoder{clients = Clients, aconfig = AConfig, vconfig = VConfig, x264 = X264, last_dts = DTS} = State) ->
-  if is_record(AConfig,video_frame) -> Client ! AConfig#video_frame{dts = DTS, pts = DTS}; true -> ok end,
-  if is_record(VConfig,video_frame) -> Client ! VConfig#video_frame{dts = DTS, pts = DTS}; true -> ok end,
+  if AConfig == undefined -> ok; true -> Client ! AConfig#video_frame{dts = DTS, pts = DTS} end,
+  if VConfig == undefined -> ok; true -> Client ! VConfig#video_frame{dts = DTS, pts = DTS} end,
   (catch X264 ! keyframe),
   erlang:monitor(process, Client),
   {reply, ok, State#encoder{clients = [Client|Clients]}};
@@ -228,16 +226,23 @@ enqueue(#video_frame{} = Frame, #encoder{aconfig = A, vconfig = V} = State) when
   real_send([Frame], State);
 
 enqueue(#video_frame{} = Frame, #encoder{buffer = Buf1} = State) ->
-  Buf2 = lists:keysort(#video_frame.dts, [Frame|Buf1]),
+  Buf2 = lists:sort(fun frame_sorter/2, [Frame|Buf1]),
   {Buf3, ToSend} = try_flush(Buf2, []),
   real_send(ToSend, State#encoder{buffer = Buf3}).
+
+
+frame_sorter(#video_frame{dts = DTS1}, #video_frame{dts = DTS2}) when DTS1 < DTS2 -> true;
+frame_sorter(#video_frame{dts = DTS, flavor = config}, #video_frame{dts = DTS, flavor = Flavor}) when Flavor =/= config -> true;
+frame_sorter(#video_frame{dts = DTS, flavor = config, content = video}, #video_frame{dts = DTS, flavor = config, content = Content}) when Content=/= video -> true;
+frame_sorter(#video_frame{}, #video_frame{}) -> false.
+
 
 real_send(ToSend, #encoder{clients = Clients, start = Start} = State) ->
   AbsDelta = timer:now_diff(erlang:now(), Start) div 1000,
   lists:foreach(fun(F1) ->
     case get(debug) of
       true ->
-        io:format("~4s ~8B ~8B ~8B ~8B~n", [F1#video_frame.codec, round(F1#video_frame.dts), round(F1#video_frame.pts), AbsDelta, round(AbsDelta - F1#video_frame.dts)]);
+        io:format("~4s ~8s ~8B ~8B ~8B ~8B~n", [F1#video_frame.codec, F1#video_frame.flavor, round(F1#video_frame.dts), round(F1#video_frame.pts), AbsDelta, round(AbsDelta - F1#video_frame.dts)]);
       _ -> ok
     end,
     [Client ! F1 || Client <- Clients]

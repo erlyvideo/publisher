@@ -19,7 +19,7 @@ run() ->
   application:start(rtmp),
   application:start(publisher),
   io:format("Starting~n"),
-  {ok, Config, ConfigPath} = file:path_consult(["/media/usb", "/etc/publisher", "."], "publisher.conf"),
+  {ok, Config, ConfigPath} = file:path_consult([".", "/media/usb", "/etc/publisher"], "publisher.conf"),
   io:format("Read config from ~s~n", [ConfigPath]),
   
   load_config(Config),
