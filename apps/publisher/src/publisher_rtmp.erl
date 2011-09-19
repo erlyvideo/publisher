@@ -46,8 +46,10 @@ init_active(URL, Options) ->
   {ok, RTMP} = rtmp_socket:connect(URL),
   Stream = receive
     {rtmp, RTMP, connected} ->
-      {rtmp, _UserInfo, Host, _Port, [$/ | FullPath], _Query} = http_uri2:parse(URL),
-      {match, [App | Path]} = re:run(FullPath, "([^\\/]+)/(.*)", [{capture,all_but_first,list}]),
+      {rtmp, _UserInfo, Host, _Port, _Path, _Query} = http_uri2:parse(URL),
+
+      {_HostPort, [$/ | FullPathWithQuery]} = http_uri2:extract_path_with_query(URL),
+      {match, [App | Path]} = re:run(FullPathWithQuery, "([^\\/]+)/(.*)", [{capture,all_but_first,list}]),
       
       rtmp_socket:setopts(RTMP, [{active, true}]),
       TcUrl = list_to_binary("rtmp://"++ Host ++"/" ++ App),

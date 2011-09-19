@@ -51,39 +51,36 @@ subscribe(Encoder) ->
 init([Options]) ->
   process_flag(trap_exit, true),
   
-  {ok, UVC} = uvc:capture([{format,yuv},{consumer,self()}|Options]),
-  % UVC = undefined,
+  Encoder1 = #encoder{options = Options},
+  
+  Encoder2 = start_h264_capture(Encoder1),
+  Encoder3 = start_aac_capture(Encoder2),
+  
+  
+  
+  {ok, Encoder3#encoder{
+    last_dts = 0,
+    start = erlang:now()
+  }}.
 
+
+start_h264_capture(#encoder{options = Options} = Encoder) ->
+  {ok, UVC} = uvc:capture([{format,yuv},{consumer,self()}|Options]),
   put(uvc_debug, proplists:get_value(debug, Options)),
-  
-  SampleRate = 32000,
-  Channels = 2,
-  {ok, Capture} = alsa:start(SampleRate, Channels),
-  % Arecord = proplists:get_value(asound, Options),
-  % Capture = open_port({spawn, "arecord --disable-resample -c 2 -D " ++ Arecord ++ " -r 32000 -f S16_LE"}, [stream, binary]),
-  put(pcm_buf, <<>>),
-  put(pcm_dts, 0),
-  AACOptions = [{sample_rate,SampleRate},{channels,Channels}],
-  {ok, AACEnc, AConfig} = proc_lib:start_link(?MODULE, faac_helper, [self(), AACOptions]),
-  
   {W,H} = proplists:get_value(size, Options),
   H264Config = proplists:get_value(h264_config, Options, "h264/encoder.preset"),
   X264Options = [{width,W},{height,H},{config,H264Config},{annexb,false}|Options],
   {ok, X264, VConfig} = proc_lib:start_link(?MODULE, x264_helper, [self(), X264Options]),
+  Encoder#encoder{uvc = UVC, vconfig = VConfig, width = W, height = H, x264 = X264}.
   
-  {ok, #encoder{
-    options = Options,
-    uvc = UVC,
-    audio = Capture,
-    aconfig = AConfig,
-    vconfig = VConfig,
-    last_dts = 0,
-    faac = AACEnc,
-    width = W,
-    height = H,
-    x264 = X264,
-    start = erlang:now()
-  }}.
+
+start_aac_capture(#encoder{options = Options} = Encoder) ->
+  SampleRate = proplists:get_value(sample_rate, Options, 32000),
+  Channels = proplists:get_value(channels, Options, 2),
+  {ok, Capture} = alsa:start(SampleRate, Channels),
+  AACOptions = [{sample_rate,SampleRate},{channels,Channels}],
+  {ok, AACEnc, AConfig} = proc_lib:start_link(?MODULE, faac_helper, [self(), AACOptions]),
+  Encoder#encoder{audio = Capture, aconfig = AConfig, faac = AACEnc}.
 
 
 x264_helper(Master, Options) ->
@@ -220,12 +217,6 @@ try_flush([F1|F2] = Frames, ToSend) ->
   end.
 
 
-% handle_info({uvc, UVC, Codec, PTS1, RAW}, #encoder{base_vpts = undefined} = State) ->
-%   handle_info({uvc, UVC, Codec, 0, RAW}, State#encoder{base_vpts = PTS1});
-% 
-% handle_info({uvc, UVC, Codec, PTS1, RAW}, State) ->
-%   {noreply, State};
-
 handle_info({uvc, _UVC, yuv, PTS1, YUV}, State) ->
   case get(start_uvc_pts) of
     undefined -> put(start_uvc_pts, PTS1);
@@ -249,18 +240,6 @@ handle_info({yuv, YUV, PTS}, #encoder{x264 = X264} = State) ->
   VideoCount = State#encoder.video_count + 1,
   % ?D({v,VideoCount, VideoCount*50, timer:now_diff(erlang:now(),State#encoder.start) div 1000, Drop}),
   {noreply, State#encoder{video_count = VideoCount}};
-
-handle_info({Capture, {data, Raw}}, State) ->
-  case <<(get(pcm_buf))/binary, Raw/binary>> of
-    <<Bin:4096/binary, Rest/binary>> ->
-      put(pcm_buf, Rest),
-      DTS = get(pcm_dts) div (32*4),
-      put(pcm_dts, get(pcm_dts)+size(Bin)),
-      handle_info({alsa, Capture, DTS, Bin}, State);
-    Bin ->
-      put(pcm_buf, Bin),
-      {noreply, State}
-  end;
 
 handle_info({alsa, _Capture, DTS, PCM}, #encoder{faac = AACEnc} = State) ->
   AACEnc ! {alsa, PCM, DTS},
