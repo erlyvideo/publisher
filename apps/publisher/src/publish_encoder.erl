@@ -51,6 +51,7 @@ subscribe(Encoder) ->
 
 init([Options]) ->
   process_flag(trap_exit, true),
+  put(debug, proplists:get_value(debug, Options)),
   
   Encoder1 = #encoder{options = Options},
   
@@ -65,30 +66,48 @@ init([Options]) ->
   }}.
 
 start_h264_capture(#encoder{options = Options} = Encoder) ->
-  case proplists:get_value(h264_source, Options, uvc) of
-    uvc -> start_uvc_capture(Encoder);
-    {ems, _} -> start_erlyvideo_capture(Encoder)
+  VideoOptions = proplists:get_value(video_capture, Options),
+  
+  case proplists:get_value(type, VideoOptions, uvc) of
+    uvc -> start_uvc_capture(Encoder, VideoOptions);
+    ems -> start_erlyvideo_capture(Encoder, VideoOptions)
   end.
 
-start_uvc_capture(#encoder{options = Options} = Encoder) ->
-  {ok, UVC} = uvc:capture([{format,yuv},{consumer,self()}|Options]),
-  put(uvc_debug, proplists:get_value(debug, Options)),
-  {W,H} = proplists:get_value(size, Options),
-  H264Config = proplists:get_value(h264_config, Options, "h264/encoder.preset"),
-  X264Options = [{width,W},{height,H},{config,H264Config},{annexb,false}|Options],
+start_uvc_capture(#encoder{} = Encoder, VideoOptions) ->
+  {ok, UVC} = uvc:capture([{format,yuv},{consumer,self()}|VideoOptions]),
+  {W,H} = proplists:get_value(size, VideoOptions),
+  H264Config = proplists:get_value(config, VideoOptions, "h264/encoder.preset"),
+  X264Options = [{width,W},{height,H},{config,H264Config},{annexb,false}|VideoOptions],
   {ok, X264, VConfig} = proc_lib:start_link(?MODULE, x264_helper, [self(), X264Options]),
   Encoder#encoder{uvc = UVC, vconfig = VConfig, width = W, height = H, x264 = X264}.
 
 
-start_erlyvideo_capture(#encoder{options = Options} = Encoder) ->
-  {ems, {URL, Type, Args}} = proplists:get_value(h264_source, Options),
-  {ok, Media} = ems_media:start_link(Type, [{url,URL}|Args]),
-  #media_info{video = [#stream_info{config = VConfig}]} = ems_media:media_info(Media),
-  Encoder#encoder{vconfig = VConfig, x264 = Media}.
+start_erlyvideo_capture(#encoder{} = Encoder, VideoOptions) ->
+  % ems_sup:start_link(),
+  application:start(log4erl),
+  ems_log:start(),
+  application:start(rtsp),
+  Type = proplists:get_value(subtype, VideoOptions),
+  {ok, RTSP, MediaInfo} = rtsp_socket:read(proplists:get_value(url,VideoOptions), [{consumer,self()}]),
+  % {ok, Media} = ems_media:start_link(Type, VideoOptions),
+  % #media_info{video = VideoInfo} = ems_media:media_info(Media),
+  #media_info{video = VideoInfo} = MediaInfo,
+  length(VideoInfo) == 1 orelse erlang:error(invalid_video_stream),
+  [#stream_info{config = VConfig}] = VideoInfo,
+  erlang:monitor(process, RTSP),
+  % ems_media:play(Media, []),
+  Encoder#encoder{vconfig = VConfig}.
 
 start_aac_capture(#encoder{options = Options} = Encoder) ->
-  SampleRate = proplists:get_value(sample_rate, Options, 32000),
-  Channels = proplists:get_value(channels, Options, 2),
+  case proplists:get_value(audio_capture, Options) of
+    undefined -> Encoder;
+    AudioOptions -> start_alsa_capture(Encoder, AudioOptions)
+  end.
+
+start_alsa_capture(#encoder{} = Encoder, AudioOptions) ->
+  alsa = proplists:get_value(type, AudioOptions),
+  SampleRate = proplists:get_value(sample_rate, AudioOptions, 32000),
+  Channels = proplists:get_value(channels, AudioOptions, 2),
   {ok, Capture} = alsa:start(SampleRate, Channels),
   AACOptions = [{sample_rate,SampleRate},{channels,Channels}],
   {ok, AACEnc, AConfig} = proc_lib:start_link(?MODULE, faac_helper, [self(), AACOptions]),
@@ -182,9 +201,9 @@ handle_call(status, _From, #encoder{buffer = Buf, start = Start} = State) ->
   {reply, Status, State};
 
 handle_call({subscribe, Client}, _From, #encoder{clients = Clients, aconfig = AConfig, vconfig = VConfig, x264 = X264, last_dts = DTS} = State) ->
-  Client ! AConfig#video_frame{dts = DTS, pts = DTS},
-  Client ! VConfig#video_frame{dts = DTS, pts = DTS},
-  X264 ! keyframe,
+  if is_record(AConfig,video_frame) -> Client ! AConfig#video_frame{dts = DTS, pts = DTS}; true -> ok end,
+  if is_record(VConfig,video_frame) -> Client ! VConfig#video_frame{dts = DTS, pts = DTS}; true -> ok end,
+  (catch X264 ! keyframe),
   erlang:monitor(process, Client),
   {reply, ok, State#encoder{clients = [Client|Clients]}};
   
@@ -205,19 +224,26 @@ check_frame_delay(#video_frame{dts = DTS} = Frame, Frames) ->
       false
   end.
 
-enqueue(#video_frame{} = Frame, #encoder{buffer = Buf1, clients = Clients, start = Start} = State) ->
+enqueue(#video_frame{} = Frame, #encoder{aconfig = A, vconfig = V} = State) when A == undefined orelse V == undefined ->
+  real_send([Frame], State);
+
+enqueue(#video_frame{} = Frame, #encoder{buffer = Buf1} = State) ->
   Buf2 = lists:keysort(#video_frame.dts, [Frame|Buf1]),
-  AbsDelta = timer:now_diff(erlang:now(), Start) div 1000,
   {Buf3, ToSend} = try_flush(Buf2, []),
+  real_send(ToSend, State#encoder{buffer = Buf3}).
+
+real_send(ToSend, #encoder{clients = Clients, start = Start} = State) ->
+  AbsDelta = timer:now_diff(erlang:now(), Start) div 1000,
   lists:foreach(fun(F1) ->
-    case get(uvc_debug) of
+    case get(debug) of
       true ->
-        io:format("~4s ~8B ~8B ~8B ~8B~n", [F1#video_frame.codec, F1#video_frame.dts, F1#video_frame.pts, AbsDelta, AbsDelta - F1#video_frame.dts]);
+        io:format("~4s ~8B ~8B ~8B ~8B~n", [F1#video_frame.codec, round(F1#video_frame.dts), round(F1#video_frame.pts), AbsDelta, round(AbsDelta - F1#video_frame.dts)]);
       _ -> ok
     end,
     [Client ! F1 || Client <- Clients]
   end, ToSend),
-  State#encoder{buffer = Buf3}.
+  State.
+  
 
 try_flush([F1|F2] = Frames, ToSend) ->
   Contents = [C || #video_frame{content = C} <- Frames],
@@ -239,6 +265,12 @@ handle_info({uvc, _UVC, yuv, PTS1, YUV}, State) ->
   % T1 = erlang:now(),
   % PTS = timer:now_diff(T1, State#encoder.start) div 1000,  
   handle_info({yuv, YUV, PTS}, State);
+
+handle_info({ems_stream, _, _}, State) ->
+  {noreply, State};
+
+handle_info({ems_stream, _, _, _}, State) ->
+  {noreply, State};
 
 handle_info(#video_frame{} = Frame, #encoder{} = State) ->
   case check_frame_delay(Frame, State#encoder.buffer) of
@@ -269,8 +301,8 @@ handle_info({'DOWN', _, process, Client, _Reason}, #encoder{clients = Clients} =
 handle_info(_Info, State) ->
   {stop, {unknown_message, _Info}, State}.
 
-terminate(_Reason, #encoder{audio = Alsa}) ->
-  alsa:stop(Alsa),
+terminate(_Reason, #encoder{}) ->
+  % alsa:stop(Alsa),
   ok.
 
 code_change(_OldVsn, State, _Extra) ->

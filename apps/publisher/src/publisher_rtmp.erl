@@ -126,7 +126,7 @@ handle_info(dump_status, #publisher{encoder = Encoder, last_dts = LastDTS} = Sta
   EncStatus = publish_encoder:status(Encoder),
   BufferedFrames = proplists:get_value(buffered_frames, EncStatus),
   AbsDelta = proplists:get_value(abs_delta, EncStatus),
-  BufInfo = case proplists:get_value(buffer, EncStatus) of
+  BufInfo = case proplists:get_value(buffer, EncStatus, 0) of
     L when length(L) >= 2 ->
       {_,L1} = lists:nth(1, L),
       {_,L2} = lists:nth(length(L), L),
