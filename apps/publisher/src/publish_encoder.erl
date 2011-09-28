@@ -31,6 +31,7 @@
   aconfig,
   vconfig,
   last_dts,
+  audio_shift = 0,
   audio_count = 0,
   video_count = 0
 }).
@@ -109,7 +110,8 @@ start_alsa_capture(#encoder{} = Encoder, AudioOptions) ->
   {ok, Capture} = alsa:start(SampleRate, Channels),
   AACOptions = [{sample_rate,SampleRate},{channels,Channels}],
   {ok, AACEnc, AConfig} = proc_lib:start_link(?MODULE, faac_helper, [self(), AACOptions]),
-  Encoder#encoder{audio = Capture, aconfig = AConfig, faac = AACEnc}.
+  AudioShift = proplists:get_value(audio_shift, AudioOptions, 0),
+  Encoder#encoder{audio = Capture, aconfig = AConfig, faac = AACEnc, audio_shift = AudioShift}.
 
 
 x264_helper(Master, Options) ->
@@ -225,11 +227,17 @@ check_frame_delay(#video_frame{dts = DTS} = Frame, Frames) ->
 enqueue(#video_frame{} = Frame, #encoder{aconfig = A, vconfig = V} = State) when A == undefined orelse V == undefined ->
   real_send([Frame], State);
 
-enqueue(#video_frame{} = Frame, #encoder{buffer = Buf1} = State) ->
+enqueue(#video_frame{} = RawFrame, #encoder{buffer = Buf1} = State) ->
+  Frame = shift_audio(RawFrame, State),
   Buf2 = lists:sort(fun frame_sorter/2, [Frame|Buf1]),
   {Buf3, ToSend} = try_flush(Buf2, []),
   real_send(ToSend, State#encoder{buffer = Buf3}).
 
+shift_audio(#video_frame{content = audio, dts = DTS, pts = PTS} = Frame, #encoder{audio_shift = AudioShift}) ->
+  Frame#video_frame{dts = DTS + AudioShift, pts = PTS + AudioShift};
+
+shift_audio(Frame, _) ->
+  Frame.
 
 frame_sorter(#video_frame{dts = DTS1}, #video_frame{dts = DTS2}) when DTS1 < DTS2 -> true;
 frame_sorter(#video_frame{dts = DTS, flavor = config}, #video_frame{dts = DTS, flavor = Flavor}) when Flavor =/= config -> true;
