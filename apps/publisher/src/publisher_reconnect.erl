@@ -1,4 +1,5 @@
 -module(publisher_reconnect).
+-define(D(X), io:format("~p:~p ~p~n", [?MODULE, ?LINE, X])).
 
 -behaviour(gen_server).
 
