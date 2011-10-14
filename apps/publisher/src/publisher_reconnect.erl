@@ -40,6 +40,10 @@ handle_info(reconnect, #reconnector{url = URL, options = Options, counter = Coun
       {noreply, State#reconnector{counter = Counter + 1}}
   end;
 
+handle_info({'DOWN', _, process, _Pid, _}, #reconnector{} = State) ->
+  self() ! reconnect,
+  {noreply, State};
+
 handle_info(Info, State) ->
   ?D({unknown_message,Info,State}),
   {noreply, State}.
