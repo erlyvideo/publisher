@@ -21,11 +21,12 @@ init([URL, Options]) ->
   {ok, #reconnector{url = URL, options = Options}}.
 
 handle_call(Call, _From, State) ->
-  {stop, {unknown_call, Call}, State}.
+  {reply, {error, {unknown_call, Call}}, State}.
 
 
 handle_cast(Cast, State) ->
-  {stop, {unknown_cast, Cast}, State}.
+  ?D({unknown_cast,Cast,State}),
+  {noreply, State}.
 
 
 handle_info(reconnect, #reconnector{url = URL, options = Options, counter = Counter} = State) ->
@@ -39,7 +40,8 @@ handle_info(reconnect, #reconnector{url = URL, options = Options, counter = Coun
   end;
 
 handle_info(Info, State) ->
-  {stop, {unknown_state, Info}, State}.
+  ?D({unknown_message,Info,State}),
+  {noreply, State}.
 
 
 terminate(_, _) -> ok.
