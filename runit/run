@@ -4,5 +4,6 @@ cd /opt/erlyvideo/lib/publisher-*
 cd priv/
 
 export HOME=/root
+export PATH=$PATH:/opt/erlyvideo/erts-5.8.4/bin
 exec ./publisher.erl
 

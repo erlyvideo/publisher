@@ -1,0 +1,7 @@
+#!/bin/sh
+
+LOG_FOLDER=/var/log/publisher
+mkdir -p $LOG_FOLDER
+exec svlogd -tt $LOG_FOLDER
+
+

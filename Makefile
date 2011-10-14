@@ -20,6 +20,15 @@ start:
 attach:
 	/opt/erlyvideo/erts-5.8.4/bin/to_erl /tmp/
 
+install:
+	mkdir -p $(DESTROOT)/opt/erlyvideo/lib/publisher-$(VERSION)/priv/
+	cp -r apps/publisher/ebin $(DESTROOT)/opt/erlyvideo/lib/publisher-$(VERSION)/
+	cp publisher.erl $(DESTROOT)/opt/erlyvideo/lib/publisher-$(VERSION)/priv/
+	mkdir -p $(DESTROOT)/etc/service $(DESTROOT)/etc/sv
+	cp -r runit $(DESTROOT)/etc/sv/publisher
+	ln -sf ../sv/publisher $(DESTROOT)/etc/service/publisher
+	
+
 package: compile
 	rm -rf tmproot
 	mkdir -p tmproot/opt/erlyvideo/lib/publisher-$(VERSION)/priv/
