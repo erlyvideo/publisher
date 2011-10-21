@@ -14,6 +14,7 @@ start_link(URL, Options) ->
 -record(reconnector, {
   url,
   options,
+  publisher,
   counter = 0
 }).
 
@@ -31,14 +32,19 @@ handle_cast(Cast, State) ->
 
 
 handle_info(reconnect, #reconnector{url = URL, options = Options, counter = Counter} = State) ->
+  flush_reconnect(),
   case publisher_sup:start_publisher(active, URL, Options) of
     {ok, Pid} ->
       erlang:monitor(process, Pid),
-      {noreply, State#reconnector{counter = 0}};
+      {noreply, State#reconnector{counter = 0, publisher = Pid}};
     _Else ->
       timer:send_after(Counter * 200, reconnect),
       {noreply, State#reconnector{counter = Counter + 1}}
   end;
+
+handle_info({'DOWN', _, process, Publisher, _}, #reconnector{publisher = Publisher} = State) ->
+  self() ! reconnect,
+  {noreply, State#reconnector{publisher = undefined}};
 
 handle_info(Info, State) ->
   ?D({unknown_message,Info,State}),
@@ -47,3 +53,11 @@ handle_info(Info, State) ->
 
 terminate(_, _) -> ok.
 code_change(_, State, _) -> {ok, State}.
+
+flush_reconnect() ->
+  receive
+    reconnect -> flush_reconnect()
+  after
+    0 -> ok
+  end.
+  

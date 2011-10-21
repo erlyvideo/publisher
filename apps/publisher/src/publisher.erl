@@ -28,7 +28,8 @@ run() ->
 
 
 load_config([{capture, Camera, Options}|Config]) ->
-  publisher:encode(Camera, Options),
+  {ok, Pid} = publisher:encode(Camera, Options),
+  link(Pid),
   load_config(Config);
   
 load_config([{publish, Camera, Publisher, RTMP}|Config]) ->
