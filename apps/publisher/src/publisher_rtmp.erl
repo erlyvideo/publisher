@@ -14,6 +14,7 @@
   stream,
   options,
   last_dts,
+  publish_is_blocked,
   encoder
 }).
 
@@ -23,6 +24,7 @@ start_link(Type, RTMP, Options) ->
   gen_server:start_link(?MODULE, [Type, RTMP, Options], []).
 
 
+-define(RECHECK_SCHEDULE, 10000).
 
 
 init([Type, RTMP, Options]) ->
@@ -120,6 +122,10 @@ handle_info(#video_frame{dts = DTS} = Frame, #publisher{rtmp = RTMP, stream = St
   send_frame(RTMP, Stream, Frame),
   {noreply, State#publisher{last_dts = DTS}};
 
+handle_info(dump_status, #publisher{encoder = undefined} = State) ->
+  error_logger:info_msg("not encoding~n"),
+  {noreply, State};
+
 handle_info(dump_status, #publisher{encoder = Encoder, last_dts = LastDTS} = State) ->
   EncStatus = publish_encoder:status(Encoder),
   BufferedFrames = proplists:get_value(buffered_frames, EncStatus),
@@ -133,6 +139,9 @@ handle_info(dump_status, #publisher{encoder = Encoder, last_dts = LastDTS} = Sta
   end,
   error_logger:info_msg("buffered:~p(~p) last_dts:~p abs_delta:~p delay:~p~n", [BufferedFrames, BufInfo, LastDTS, AbsDelta, AbsDelta - LastDTS]),
   {noreply, State};
+
+handle_info(exit, #publisher{} = State) ->
+  {stop, normal, State};
 
 handle_info(Msg, State) ->
   {stop, {unknown_info, Msg}, State}.
@@ -172,11 +181,17 @@ handle_invoke(#rtmp_funcall{command = <<"schedule">>, args = [null, JSON]}, #pub
   Schedule = parse_schedule(proplists:get_value(<<"schedule">>, Info)),
   Mode = proplists:get_value(<<"mode">>, Info),
   io:format("Schedule: ~s: ~p~n", [Mode, Schedule]),
+  % {noreply, State#publisher{publish_is_blocked = does_schedule_block(Schedule)}};
   {noreply, State};
 
 handle_invoke(AMF, State) ->
   io:format("Unknown funcall ~p~n", [AMF]),
   {noreply, State}.
+
+handle_status(<<"NetStream.Publish.Start">>, _Status, #publisher{publish_is_blocked = true, options = Options} = State) ->
+  error_logger:info_msg("Schedule disabled camera ~p~n", [proplists:get_value(encoder, Options)]),
+  timer:send_after(?RECHECK_SCHEDULE, exit),
+  {noreply, State};
 
 handle_status(<<"NetStream.Publish.Start">>, _Status, #publisher{options = Options} = State) ->
   Encoder = proplists:get_value(encoder, Options),
@@ -206,3 +221,23 @@ parse_schedule(Schedule) ->
 parse_time(Time) ->
   [T1,T2] = string:tokens(binary_to_list(Time), ":"),
   {list_to_integer(T1), list_to_integer(T2), 0}.
+
+does_schedule_block(Schedule) ->
+  {Date, Time} = erlang:localtime(),
+  Day = calendar:day_of_the_week(Date),
+  case proplists:get_value(Day, Schedule) of
+    undefined -> 
+      true;
+    Segments ->
+      [] =/= lists:filter(fun(Segment) ->
+        time_in_segment(Time,Segment)
+      end, Segments)
+  end.
+
+time_in_segment(Time, Segment) ->
+  Start = proplists:get_value(start, Segment),
+  Finish = proplists:get_value(finish, Segment),
+  time_le(Start, Time) andalso time_le(Time, Finish).
+
+time_le({H1,M1,S1}, {H2,M2,S2}) ->
+  H1 =< H2 andalso M1 =< M2 andalso S1 =< S2.
