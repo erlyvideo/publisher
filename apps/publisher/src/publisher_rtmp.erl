@@ -168,6 +168,13 @@ handle_invoke(#rtmp_funcall{command = <<"play">>, stream_id = StreamId, args = [
 handle_invoke(#rtmp_funcall{command = <<"onStatus">>}, #publisher{} = State) ->
   {noreply, State};
 
+handle_invoke(#rtmp_funcall{command = <<"schedule">>, args = [null, JSON]}, #publisher{} = State) ->
+  Info = jsonerl:decode(JSON),
+  Schedule = parse_schedule(proplists:get_value(<<"schedule">>, Info)),
+  Mode = proplists:get_value(<<"mode">>, Info),
+  io:format("Schedule: ~s: ~p~n", [Mode, Schedule]),
+  {noreply, State};
+
 handle_invoke(AMF, State) ->
   io:format("Unknown funcall ~p~n", [AMF]),
   {noreply, State}.
@@ -175,3 +182,19 @@ handle_invoke(AMF, State) ->
 
 terminate(_, _) -> ok.
 code_change(_, State, _) -> {ok, State}.
+
+
+parse_schedule(Schedule) ->
+  lists:map(fun(Info) ->
+    Day = proplists:get_value(<<"day">>, Info),
+    SegmentFun = fun(Segment) ->
+      Start = parse_time(proplists:get_value(<<"start">>, Segment)),
+      Finish = parse_time(proplists:get_value(<<"finish">>, Segment)),
+      [{start,Start},{finish,Finish}]
+    end,
+    [{day,Day},{segments, [SegmentFun(Segment) || Segment <- proplists:get_value(<<"segments">>, Info)]}]
+  end, Schedule).
+
+parse_time(Time) ->
+  [T1,T2] = string:tokens(binary_to_list(Time), ":"),
+  {list_to_integer(T1), list_to_integer(T2), 0}.
