@@ -165,7 +165,8 @@ handle_invoke(#rtmp_funcall{command = <<"play">>, stream_id = StreamId, args = [
   publish_encoder:subscribe(Encoder),
   {noreply, State#publisher{encoder = Encoder}};
 
-handle_invoke(#rtmp_funcall{command = <<"onStatus">>}, #publisher{} = State) ->
+handle_invoke(#rtmp_funcall{command = <<"onStatus">>, args = [null, Status]}, #publisher{} = State) ->
+  io:format("onStatus: ~p~n", [Status]),
   {noreply, State};
 
 handle_invoke(#rtmp_funcall{command = <<"schedule">>, args = [null, JSON]}, #publisher{} = State) ->

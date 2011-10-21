@@ -53,18 +53,18 @@ subscribe(Encoder) ->
 init([Options]) ->
   process_flag(trap_exit, true),
   put(debug, proplists:get_value(debug, Options)),
-  
-  Encoder1 = #encoder{options = Options},
-  
+  {ok, #encoder{options = Options}}.
+
+ensure_capture(#encoder{start = undefined} = Encoder1) ->
   Encoder2 = start_h264_capture(Encoder1),
   Encoder3 = start_aac_capture(Encoder2),
-  
-  
-  
-  {ok, Encoder3#encoder{
+  Encoder3#encoder{
     last_dts = 0,
     start = erlang:now()
-  }}.
+  };
+
+ensure_capture(Encoder) ->
+  Encoder.
 
 start_h264_capture(#encoder{options = Options} = Encoder) ->
   VideoOptions = proplists:get_value(video_capture, Options),
@@ -205,7 +205,7 @@ handle_call({subscribe, Client}, _From, #encoder{clients = Clients, aconfig = AC
   if VConfig == undefined -> ok; true -> Client ! VConfig#video_frame{dts = DTS, pts = DTS} end,
   (catch X264 ! keyframe),
   erlang:monitor(process, Client),
-  {reply, ok, State#encoder{clients = [Client|Clients]}};
+  {reply, ok, ensure_capture(State#encoder{clients = [Client|Clients]})};
   
 
 handle_call(Request, _From, State) ->
