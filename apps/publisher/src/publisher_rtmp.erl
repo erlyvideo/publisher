@@ -63,14 +63,12 @@ init_active(URL, Options) ->
       erlang:exit(rtmp_timeout)
   end,
   {rtmp, Socket} = rtmp_socket:get_socket(RTMP),
-  inet:setopts(Socket, [{sndbuf,1024*1024}]),
-  Encoder = proplists:get_value(encoder, Options),
-  publish_encoder:subscribe(Encoder),
+  inet:setopts(Socket, [{sndbuf,16*1024*1024}]),
   #publisher{
     url = URL,
     rtmp = RTMP,
-    stream = Stream,
-    encoder = Encoder
+    options = Options,
+    stream = Stream
   }.
 
 
@@ -165,9 +163,9 @@ handle_invoke(#rtmp_funcall{command = <<"play">>, stream_id = StreamId, args = [
   publish_encoder:subscribe(Encoder),
   {noreply, State#publisher{encoder = Encoder}};
 
-handle_invoke(#rtmp_funcall{command = <<"onStatus">>, args = [null, Status]}, #publisher{} = State) ->
-  io:format("onStatus: ~p~n", [Status]),
-  {noreply, State};
+handle_invoke(#rtmp_funcall{command = <<"onStatus">>, args = [null, {object, Status}]}, #publisher{} = State) ->
+  Code = proplists:get_value(code, Status),
+  handle_status(Code, Status, State);
 
 handle_invoke(#rtmp_funcall{command = <<"schedule">>, args = [null, JSON]}, #publisher{} = State) ->
   Info = jsonerl:decode(JSON),
@@ -178,6 +176,15 @@ handle_invoke(#rtmp_funcall{command = <<"schedule">>, args = [null, JSON]}, #pub
 
 handle_invoke(AMF, State) ->
   io:format("Unknown funcall ~p~n", [AMF]),
+  {noreply, State}.
+
+handle_status(<<"NetStream.Publish.Start">>, _Status, #publisher{options = Options} = State) ->
+  Encoder = proplists:get_value(encoder, Options),
+  publish_encoder:subscribe(Encoder),
+  {noreply, State#publisher{encoder = Encoder}};
+
+handle_status(Code, _Status, State) ->
+  io:format("onStatus: ~p~n", [Code]),
   {noreply, State}.
 
 
