@@ -47,7 +47,7 @@ status(Encoder) ->
   gen_server:call(Encoder, status).
   
 subscribe(Encoder) ->
-  erlang:monitor(process, Encoder),
+  erlang:monitor(process, erlang:whereis(Encoder)),
   gen_server:call(Encoder, {subscribe, self()}).
 
 init([Options]) ->
@@ -76,6 +76,7 @@ start_h264_capture(#encoder{options = Options} = Encoder) ->
 
 start_uvc_capture(#encoder{} = Encoder, VideoOptions) ->
   {ok, UVC} = uvc:capture([{format,yuv},{consumer,self()}|VideoOptions]),
+  erlang:monitor(process, UVC),
   {W,H} = proplists:get_value(size, VideoOptions),
   H264Config = proplists:get_value(config, VideoOptions, "h264/encoder.preset"),
   X264Options = [{width,W},{height,H},{config,H264Config},{annexb,false}|VideoOptions],
@@ -307,6 +308,9 @@ handle_info({alsa, _Capture, DTS, PCM}, #encoder{faac = AACEnc} = State) ->
   % ?D({a, DTS, StreamDelta, AbsDelta, AbsDelta - StreamDelta}),
   AudioCount = State#encoder.audio_count + 1,
   {noreply, State#encoder{audio_count = AudioCount}};
+
+handle_info({'DOWN', _, process, UVC, _Reason}, #encoder{uvc = UVC} = Server) ->
+  {stop, normal, Server};
 
 handle_info({'DOWN', _, process, Client, _Reason}, #encoder{clients = Clients} = Server) ->
   {noreply, Server#encoder{clients = lists:delete(Client, Clients)}};

@@ -14,9 +14,11 @@ main([]) ->
   code:add_pathz("apps/publisher/ebin"),
   Root = filename:join(filename:dirname(escript:script_name()), ".."),
   code:add_pathz(Root++"/ebin"),
-  publisher:run(),
+  {ok, Pid} = publisher:run(),
+  erlang:monitor(process, Pid),
   receive
-    stop -> ok
+    stop -> ok;
+    {'DOWN', _, process, Pid, _} -> ok
   end,
   ok.
 
