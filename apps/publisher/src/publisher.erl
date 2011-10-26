@@ -9,14 +9,12 @@
 
 run() ->
   os:putenv("LD_LIBRARY_PATH", "deps/h264/priv"),
-  code:add_pathz("deps/uvc/ebin"),
-  code:add_pathz("deps/alsa/ebin"),
-  code:add_pathz("deps/jpeg/ebin"),
-  code:add_pathz("deps/h264/ebin"),
+  [code:add_pathz(P) || P <- filelib:wildcard("deps/*/ebin")],
   [code:add_pathz(P) || P <- filelib:wildcard("../erlyvideo/apps/*/ebin")],
   [code:add_pathz(P) || P <- filelib:wildcard("/opt/erlyvideo/lib/*/ebin")],
   application:start(sasl),
   application:start(rtmp),
+  application:start(gproc),
   application:start(publisher),
   io:format("Starting~n"),
   {ok, Config, ConfigPath} = file:path_consult([".", "/media/usb", "/etc/publisher"], "publisher.conf"),

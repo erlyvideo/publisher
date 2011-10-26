@@ -30,6 +30,7 @@ stop(RTMP) ->
 
 
 init([Type, RTMP, Options]) ->
+  gproc:add_local_name({publisher,RTMP}),
   Publisher = case Type of
     passive -> init_passive(RTMP, Options);
     active  -> init_active(RTMP, Options)

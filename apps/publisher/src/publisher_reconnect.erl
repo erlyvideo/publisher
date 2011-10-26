@@ -14,11 +14,8 @@ start_link(URL, Options) ->
 -record(reconnector, {
   url,
   options,
-  publisher,
-  publisher_ref,
   schedule_url,
-  schedule,
-  counter = 0
+  schedule
 }).
 
 -define(CHECK_TIMEOUT, 2340).
@@ -46,12 +43,12 @@ handle_info(check, #reconnector{schedule_url = URL, schedule = undefined} = Stat
   {ok, Schedule} = publish_schedule:fetch(URL),
   handle_info(check, State#reconnector{schedule = Schedule});
 
-handle_info(check, #reconnector{url = URL, options = Options, counter = Counter, 
-  schedule = Schedule, publisher = OldPid, publisher_ref = OldRef} = State) ->
+handle_info(check, #reconnector{url = URL, options = Options, schedule = Schedule} = State) ->
   flush_check(),
   
   IsStreamingScheduled = publish_schedule:is_streaming_scheduled(Schedule),
-  PublisherIsActive = erlang:is_process_alive(OldPid),
+  OldPid = gproc:lookup_local_name({publisher,URL}),
+  PublisherIsActive = is_alive(OldPid),
   
   timer:send_after(?CHECK_TIMEOUT, check),
   case {IsStreamingScheduled,PublisherIsActive} of
@@ -59,25 +56,22 @@ handle_info(check, #reconnector{url = URL, options = Options, counter = Counter,
       {noreply, State};
     {true, false} ->
       ?D({need_to_launch, URL}),
-      case publisher_sup:start_publisher(active, URL, Options) of
-        {ok, Pid} ->
-          Ref = erlang:monitor(process, Pid),
-          {noreply, State#reconnector{counter = 0, publisher = Pid, publisher_ref = Ref}};
-        _Else ->
-          {noreply, State#reconnector{counter = Counter + 1, publisher = undefined, publisher_ref = undefined}}
-      end;
+      publisher_sup:start_publisher(active, URL, Options),
+      {noreply, State};
     {false, false} ->
       {noreply, State};
     {false, true} ->
-      ?D({need_to_stop,URL}),
-      erlang:demonitor(OldRef, [flush]),
+      ?D({need_to_stop,URL,OldPid}),
       publisher_rtmp:stop(OldPid),
-      {noreply, State#reconnector{publisher = undefined, publisher_ref = undefined}}
+      timer:sleep(100),
+      (catch erlang:exit(OldPid, normal)),
+      (catch erlang:exit(OldPid, kill)),
+      {noreply, State}
   end;
   
-handle_info({'DOWN', _, process, Publisher, _}, #reconnector{publisher = Publisher} = State) ->
+handle_info({'DOWN', _, process, _Publisher, _}, #reconnector{} = State) ->
   self() ! check,
-  {noreply, State#reconnector{publisher = undefined}};
+  {noreply, State};
 
 handle_info(Info, State) ->
   ?D({unknown_message,Info,State}),
@@ -94,3 +88,5 @@ flush_check() ->
     0 -> ok
   end.
   
+is_alive(Pid) when is_pid(Pid) -> erlang:is_process_alive(Pid);
+is_alive(_) -> false.
