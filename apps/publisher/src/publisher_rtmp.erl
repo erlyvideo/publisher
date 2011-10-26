@@ -122,7 +122,6 @@ handle_info({rtmp, _Socket, #rtmp_message{} = Message}, State) ->
   handle_message(Message, State);
 
 handle_info(#video_frame{dts = DTS} = Frame, #publisher{rtmp = RTMP, stream = Stream} = State) ->
-  io:format("frame: ~p ~p ~p~n", [Frame#video_frame.codec, Frame#video_frame.flavor, DTS]),
   send_frame(RTMP, Stream, Frame),
   {noreply, State#publisher{last_dts = DTS}};
 
