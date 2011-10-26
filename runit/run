@@ -5,6 +5,7 @@ cd priv/
 
 export HOME=/root
 export PATH=$PATH:/opt/erlyvideo/erts-5.8.4/bin
+amixer -c 0 set Mic 1000
 amixer -c 1 set Mic 1000
 exec ./publisher.erl
 

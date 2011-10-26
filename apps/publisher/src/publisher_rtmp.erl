@@ -5,7 +5,7 @@
 -include_lib("rtmp/include/rtmp.hrl").
 
 
--export([start_link/3]).
+-export([start_link/3, stop/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
 -record(publisher, {
@@ -14,7 +14,6 @@
   stream,
   options,
   last_dts,
-  publish_is_blocked,
   encoder
 }).
 
@@ -23,6 +22,9 @@
 start_link(Type, RTMP, Options) ->
   gen_server:start_link(?MODULE, [Type, RTMP, Options], []).
 
+
+stop(RTMP) ->
+  RTMP ! exit.
 
 -define(RECHECK_SCHEDULE, 10000).
 
@@ -176,22 +178,9 @@ handle_invoke(#rtmp_funcall{command = <<"onStatus">>, args = [null, {object, Sta
   Code = proplists:get_value(code, Status),
   handle_status(Code, Status, State);
 
-handle_invoke(#rtmp_funcall{command = <<"schedule">>, args = [null, JSON]}, #publisher{} = State) ->
-  Info = jsonerl:decode(JSON),
-  Schedule = parse_schedule(proplists:get_value(<<"schedule">>, Info)),
-  Mode = proplists:get_value(<<"mode">>, Info),
-  io:format("Schedule: ~s: ~p~n", [Mode, Schedule]),
-  % {noreply, State#publisher{publish_is_blocked = does_schedule_block(Schedule)}};
-  {noreply, State};
-
 handle_invoke(AMF, State) ->
   io:format("Unknown funcall ~p~n", [AMF]),
   {noreply, State}.
-
-handle_status(<<"NetStream.Publish.Start">>, _Status, #publisher{publish_is_blocked = true, options = Options} = State) ->
-  error_logger:info_msg("Schedule disabled camera ~p~n", [proplists:get_value(encoder, Options)]),
-  timer:send_after(?RECHECK_SCHEDULE, exit),
-  {noreply, State};
 
 handle_status(<<"NetStream.Publish.Start">>, _Status, #publisher{options = Options} = State) ->
   Encoder = proplists:get_value(encoder, Options),
@@ -207,37 +196,3 @@ terminate(_, _) -> ok.
 code_change(_, State, _) -> {ok, State}.
 
 
-parse_schedule(Schedule) ->
-  lists:map(fun(Info) ->
-    Day = proplists:get_value(<<"day">>, Info),
-    SegmentFun = fun(Segment) ->
-      Start = parse_time(proplists:get_value(<<"start">>, Segment)),
-      Finish = parse_time(proplists:get_value(<<"finish">>, Segment)),
-      [{start,Start},{finish,Finish}]
-    end,
-    [{day,Day},{segments, [SegmentFun(Segment) || Segment <- proplists:get_value(<<"segments">>, Info)]}]
-  end, Schedule).
-
-parse_time(Time) ->
-  [T1,T2] = string:tokens(binary_to_list(Time), ":"),
-  {list_to_integer(T1), list_to_integer(T2), 0}.
-
-does_schedule_block(Schedule) ->
-  {Date, Time} = erlang:localtime(),
-  Day = calendar:day_of_the_week(Date),
-  case proplists:get_value(Day, Schedule) of
-    undefined -> 
-      true;
-    Segments ->
-      [] =/= lists:filter(fun(Segment) ->
-        time_in_segment(Time,Segment)
-      end, Segments)
-  end.
-
-time_in_segment(Time, Segment) ->
-  Start = proplists:get_value(start, Segment),
-  Finish = proplists:get_value(finish, Segment),
-  time_le(Start, Time) andalso time_le(Time, Finish).
-
-time_le({H1,M1,S1}, {H2,M2,S2}) ->
-  H1 =< H2 andalso M1 =< M2 andalso S1 =< S2.

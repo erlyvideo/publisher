@@ -22,7 +22,6 @@
 %%%---------------------------------------------------------------------------------------
 -module(http_stream).
 -author('Max Lapshin <max@maxidoors.ru>').
--include("log.hrl").
 
 -export([get/2, get_with_body/2, head/2]).
 
@@ -120,10 +119,8 @@ make_raw_request(URL, Options) ->
     {http, Socket, {http_response, _Version, Code, _Reply}} ->
       {http, Socket, Code};
     {tcp_closed, Socket} ->
-      ?D(normallll),
       {error, normal};
     {tcp_error, Socket, Reason} ->
-      ?D(Reason),
       {error, Reason}
   after
     Timeout ->
