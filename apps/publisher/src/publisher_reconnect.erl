@@ -43,10 +43,13 @@ handle_info(check, #reconnector{schedule_url = URL, schedule = undefined} = Stat
   {ok, Schedule} = publish_schedule:fetch(URL),
   handle_info(check, State#reconnector{schedule = Schedule});
 
-handle_info(check, #reconnector{url = URL, options = Options, schedule = Schedule} = State) ->
+handle_info(check, #reconnector{url = URL, schedule_url = ScheduleUrl, options = Options, schedule = Schedule} = State) ->
   flush_check(),
   
-  IsStreamingScheduled = publish_schedule:is_streaming_scheduled(Schedule),
+  IsStreamingScheduled = case ScheduleUrl of
+    undefined -> true;
+    _ -> publish_schedule:is_streaming_scheduled(Schedule)
+  end,
   OldPid = gproc:lookup_local_name({publisher,URL}),
   PublisherIsActive = is_alive(OldPid),
   

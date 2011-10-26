@@ -30,7 +30,7 @@
   buffer = [],
   aconfig,
   vconfig,
-  last_dts,
+  last_dts = 0,
   audio_shift = 0,
   audio_count = 0,
   video_count = 0
@@ -74,17 +74,18 @@ start_h264_capture(#encoder{options = Options} = Encoder) ->
     rtsp -> start_rtsp_capture(Encoder, VideoOptions)
   end.
 
-start_uvc_capture(#encoder{} = Encoder, VideoOptions) ->
+start_uvc_capture(#encoder{clients = Clients, last_dts = DTS} = Encoder, VideoOptions) ->
   {ok, UVC} = uvc:capture([{format,yuv},{consumer,self()}|VideoOptions]),
   erlang:monitor(process, UVC),
   {W,H} = proplists:get_value(size, VideoOptions),
   H264Config = proplists:get_value(config, VideoOptions, "h264/encoder.preset"),
   X264Options = [{width,W},{height,H},{config,H264Config},{annexb,false}|VideoOptions],
   {ok, X264, VConfig} = proc_lib:start_link(?MODULE, x264_helper, [self(), X264Options]),
+  [Client ! VConfig#video_frame{dts = DTS, pts = DTS} || Client <- Clients],
   Encoder#encoder{uvc = UVC, vconfig = VConfig, width = W, height = H, x264 = X264}.
 
 
-start_rtsp_capture(#encoder{} = Encoder, VideoOptions) ->
+start_rtsp_capture(#encoder{clients = Clients, last_dts = DTS} = Encoder, VideoOptions) ->
   application:start(log4erl),
   ems_log:start(),
   application:start(rtsp),
@@ -96,7 +97,10 @@ start_rtsp_capture(#encoder{} = Encoder, VideoOptions) ->
   [#stream_info{} = VideoStream] = VideoInfo,
   erlang:monitor(process, RTSP),
   % ems_media:play(Media, []),
-  Encoder#encoder{vconfig = video_frame:config_frame(VideoStream)}.
+  VConfig = video_frame:config_frame(VideoStream),
+  [Client ! VConfig#video_frame{dts = DTS, pts = DTS} || Client <- Clients],
+  
+  Encoder#encoder{vconfig = VConfig}.
 
 start_aac_capture(#encoder{options = Options} = Encoder) ->
   case proplists:get_value(audio_capture, Options) of
@@ -104,7 +108,7 @@ start_aac_capture(#encoder{options = Options} = Encoder) ->
     AudioOptions -> start_alsa_capture(Encoder, AudioOptions)
   end.
 
-start_alsa_capture(#encoder{} = Encoder, AudioOptions) ->
+start_alsa_capture(#encoder{clients = Clients, last_dts = DTS} = Encoder, AudioOptions) ->
   alsa = proplists:get_value(type, AudioOptions),
   SampleRate = proplists:get_value(sample_rate, AudioOptions, 32000),
   Channels = proplists:get_value(channels, AudioOptions, 2),
@@ -112,6 +116,7 @@ start_alsa_capture(#encoder{} = Encoder, AudioOptions) ->
   AACOptions = [{sample_rate,SampleRate},{channels,Channels}],
   {ok, AACEnc, AConfig} = proc_lib:start_link(?MODULE, faac_helper, [self(), AACOptions]),
   AudioShift = proplists:get_value(audio_shift, AudioOptions, 0),
+  [Client ! AConfig#video_frame{dts = DTS, pts = DTS} || Client <- Clients],
   Encoder#encoder{audio = Capture, aconfig = AConfig, faac = AACEnc, audio_shift = AudioShift}.
 
 
@@ -202,6 +207,7 @@ handle_call(status, _From, #encoder{buffer = Buf, start = Start} = State) ->
   {reply, Status, State};
 
 handle_call({subscribe, Client}, _From, #encoder{clients = Clients, aconfig = AConfig, vconfig = VConfig, x264 = X264, last_dts = DTS} = State) ->
+  io:format("Subscribe ~p, ~p, ~p, ~p~n", [Client, DTS, VConfig, AConfig]),
   if AConfig == undefined -> ok; true -> Client ! AConfig#video_frame{dts = DTS, pts = DTS} end,
   if VConfig == undefined -> ok; true -> Client ! VConfig#video_frame{dts = DTS, pts = DTS} end,
   (catch X264 ! keyframe),
