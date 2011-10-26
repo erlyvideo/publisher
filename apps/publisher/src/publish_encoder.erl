@@ -313,7 +313,14 @@ handle_info({'DOWN', _, process, UVC, _Reason}, #encoder{uvc = UVC} = Server) ->
   {stop, normal, Server};
 
 handle_info({'DOWN', _, process, Client, _Reason}, #encoder{clients = Clients} = Server) ->
-  {noreply, Server#encoder{clients = lists:delete(Client, Clients)}};
+  case lists:member(Client, Clients) of
+    true when length(Clients) == 1 ->
+      {stop, normal, Server};
+    true ->
+      {noreply, Server#encoder{clients = lists:delete(Client, Clients)}};
+    false ->
+      {stop, normal, Server}  
+  end;
 
 handle_info(_Info, State) ->
   {stop, {unknown_message, _Info}, State}.

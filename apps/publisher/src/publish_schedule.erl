@@ -13,7 +13,7 @@
 }).
 
 fetch(URL) ->
-  try http_stream:get_with_body(URL, []) of
+  try http_stream:get_with_body(URL, [{timeout,2000}]) of
     {ok, _Headers, Body} ->
       {ok, Schedule} = parse(Body),
       {ok, Schedule#schedule{url = URL}}
@@ -48,7 +48,7 @@ parse_time(Time) ->
 is_streaming_scheduled(#schedule{} = Schedule) ->
   Now = erlang:localtime(),
   Result = is_streaming_scheduled(Schedule, Now),
-  io:format("scheduled(~p)? ~p, ~p  in ~p~n", [Result, Now, calendar:day_of_the_week(element(1,Now)), Schedule#schedule.schedule]),
+  % io:format("scheduled(~p)? ~p, ~p  in ~p~n", [Result, Now, calendar:day_of_the_week(element(1,Now)), Schedule#schedule.schedule]),
   Result;
   
 
@@ -61,9 +61,9 @@ is_streaming_scheduled(#schedule{schedule = Schedule}, {Date, Time}) ->
     undefined ->
       true;
     Segments ->
-      io:format("Segments: ~p ~p~n", [Time, lists:filter(fun(Segment) ->
-        time_in_segment(Time,Segment)
-      end, Segments)]),
+      % io:format("Segments: ~p ~p~n", [Time, lists:filter(fun(Segment) ->
+      %   time_in_segment(Time,Segment)
+      % end, Segments)]),
       [] =/= lists:filter(fun(Segment) ->
         time_in_segment(Time,Segment)
       end, Segments)
