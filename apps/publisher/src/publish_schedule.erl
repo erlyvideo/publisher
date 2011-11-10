@@ -9,6 +9,7 @@
 -record(schedule, {
   url,
   mode,
+  work_now,
   schedule
 }).
 
@@ -27,7 +28,8 @@ parse(JSON) ->
   Info = jsonerl:decode(JSON),
   Schedule = parse_schedule(proplists:get_value(<<"schedule">>, Info)),
   Mode = proplists:get_value(<<"mode">>, Info),
-  {ok, #schedule{mode = Mode, schedule = Schedule}}.
+  WorkNow = proplists:get_value(<<"work_now">>, Info),
+  {ok, #schedule{mode = Mode, schedule = Schedule, work_now = WorkNow}}.
 
 
 parse_schedule(Schedule) ->
@@ -45,15 +47,16 @@ parse_time(Time) ->
   [T1,T2] = string:tokens(binary_to_list(Time), ":"),
   {list_to_integer(T1), list_to_integer(T2), 0}.
 
-is_streaming_scheduled(#schedule{} = Schedule) ->
-  Now = erlang:localtime(),
-  Result = is_streaming_scheduled(Schedule, Now),
+is_streaming_scheduled(#schedule{work_now = WorkNow} = _Schedule) ->
+  %Now = erlang:localtime(),
+  %Result = is_streaming_scheduled(Schedule, Now),
   % io:format("scheduled(~p)? ~p, ~p  in ~p~n", [Result, Now, calendar:day_of_the_week(element(1,Now)), Schedule#schedule.schedule]),
-  Result;
+  %Result;
+  WorkNow;
   
 
 is_streaming_scheduled(_) ->
-  false.
+  undefined.
 
 is_streaming_scheduled(#schedule{schedule = Schedule}, {Date, Time}) ->
   Day = calendar:day_of_the_week(Date),

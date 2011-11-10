@@ -19,13 +19,14 @@ start_link(URL, Options) ->
 }).
 
 -define(CHECK_TIMEOUT, 2340).
--define(SCHEDULE_TIMEOUT, 3000).
+-define(SCHEDULE_TIMEOUT, 30000).
 
 
 init([URL, Options]) ->
   ScheduleUrl = proplists:get_value(schedule, Options),
   self() ! check,
-  timer:send_interval(?SCHEDULE_TIMEOUT, refresh_schedule),
+  ScheduleTimeout = proplists:get_value(refresh, Options, ?SCHEDULE_TIMEOUT),
+  timer:send_interval(ScheduleTimeout, refresh_schedule),
   {ok, #reconnector{url = URL, options = Options, schedule_url = ScheduleUrl}}.
 
 handle_call(Call, _From, State) ->
@@ -69,6 +70,9 @@ handle_info(check, #reconnector{url = URL, schedule_url = ScheduleUrl, options =
       timer:sleep(100),
       (catch erlang:exit(OldPid, normal)),
       (catch erlang:exit(OldPid, kill)),
+      {noreply, State};
+    {undefined, _} ->
+      ?D({unknown_publish_state,URL}),
       {noreply, State}
   end;
   
