@@ -22,7 +22,7 @@ attach:
 
 install:
 	mkdir -p $(DESTROOT)/opt/erlyvideo/lib/
-	cp -r deps/gproc deps/gen_leader gen/edown $(DESTROOT)/opt/erlyvideo/lib/
+	cp -r deps/gproc deps/gen_leader deps/edown $(DESTROOT)/opt/erlyvideo/lib/
 	mkdir -p $(DESTROOT)/opt/erlyvideo/lib/publisher-$(VERSION)/priv/
 	cp -r apps/publisher/ebin $(DESTROOT)/opt/erlyvideo/lib/publisher-$(VERSION)/
 	cp publisher.erl $(DESTROOT)/opt/erlyvideo/lib/publisher-$(VERSION)/priv/
