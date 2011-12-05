@@ -85,8 +85,12 @@ make_raw_request(URL, Options) ->
       {ok, NewSock} = gen_tcp:connect(Host, Port, [binary, {packet, http_bin}, {active, false}, {recbuf, 65536}, inet], Timeout),
       NewSock;
     OldSocket ->
-      inet:setopts(OldSocket, [{packet,http_bin},{active,false}]),
-      OldSocket
+      case inet:setopts(OldSocket, [{packet,http_bin},{active,false}]) of
+        ok -> OldSocket;
+        _ ->
+          {ok, NewSock} = gen_tcp:connect(Host, Port, [binary, {packet, http_bin}, {active, false}, {recbuf, 65536}, inet], Timeout),
+          NewSock
+      end
   end,
   
   Body = proplists:get_value(body, Options, ""),
