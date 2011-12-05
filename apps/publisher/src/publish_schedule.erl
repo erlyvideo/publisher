@@ -15,9 +15,10 @@
 
 fetch(URL) ->
   inets:start(),
-  try httpc:request(URL, [{timeout,2000}]) of
-    {ok, {_Code, _Headers, Body}} ->
+  try http_stream_pub:get_with_body(URL, [{timeout,2000},{socket,get(http_socket)}]) of
+    {ok, Socket, _Headers, Body} ->
       {ok, Schedule} = parse(Body),
+      put(http_socket, Socket),
       {ok, Schedule#schedule{url = URL}}
   catch
     Class:Error ->
