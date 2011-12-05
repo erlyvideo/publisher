@@ -22,7 +22,6 @@
 %%%---------------------------------------------------------------------------------------
 -module(http_stream_pub).
 -author('Max Lapshin <max@maxidoors.ru>').
--include("log.hrl").
 
 -export([get/2, get_with_body/2, head/2]).
 
