@@ -14,7 +14,6 @@
 }).
 
 fetch(URL) ->
-  inets:start(),
   try http_stream_pub:get_with_body(URL, [{timeout,5000}]) of
     {ok, Socket, _Headers, Body} ->
       gen_tcp:close(Socket),
