@@ -142,12 +142,12 @@ get_with_body(URL, Options) ->
           case proplists:get_value('Transfer-Encoding', Headers) of
             <<"chunked">> ->
               Body = get_chunked_body(Socket),
-              {ok, Headers, Body};
+              {ok, Socket, Headers, Body};
             _ ->
               case proplists:get_value('Connection', Headers) of
                 <<"close">> ->
                   Body = get_plain_body(Socket),
-                  {ok, Headers, Body};
+                  {ok, Socket, Headers, Body};
                 _ ->
                   gen_tcp:close(Socket),
                   {error, no_length}
