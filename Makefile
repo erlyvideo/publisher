@@ -20,6 +20,12 @@ start:
 attach:
 	/opt/erlyvideo/erts-5.8.4/bin/to_erl /tmp/
 
+image:
+	rm -rf root
+	mkdir -p root
+	make DESTROOT=root install
+	mksquashfs root publisher.squashfs 
+
 install:
 	mkdir -p $(DESTROOT)/opt/erlyvideo/lib/
 	cp -r deps/gproc deps/gen_leader deps/edown $(DESTROOT)/opt/erlyvideo/lib/
