@@ -1,5 +1,5 @@
 %%% @author     Max Lapshin <max@maxidoors.ru>
-%%% @copyright  2009 Max Lapshin
+%%% @copyright  2009-2012 Max Lapshin
 %%% @doc        Starts in-process http stream
 %%% @reference  See <a href="http://erlyvideo.org/" target="_top">http://erlyvideo.org/</a> for more information
 %%% @end
