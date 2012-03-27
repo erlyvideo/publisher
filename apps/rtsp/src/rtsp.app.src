@@ -1,6 +1,6 @@
 {application, rtsp,
 [{description, "RTSP handling library"},
- {vsn, git},
+ {vsn, "2.10.18"},
  {registered,[rtsp]},
  {applications, [kernel,stdlib]},
  {mod, {rtsp,[]}}

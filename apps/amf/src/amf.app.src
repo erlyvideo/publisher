@@ -1,12 +1,11 @@
-{application, publisher,
+{application, amf,
  [
-  {description, ""},
-  {vsn, "2"},
+  {description, "AMF0/3 handling library"},
+  {vsn, "1.0"},
   {registered, []},
   {applications, [
                   kernel,
                   stdlib
                  ]},
-  {mod, { publisher_app, []}},
   {env, []}
  ]}.
