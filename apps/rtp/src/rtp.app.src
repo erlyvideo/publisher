@@ -1,6 +1,6 @@
 {application, rtp,
 [{description, "RTP handling library"},
- {vsn, ""2.10.18""},
+ {vsn, "2.10.18"},
  {registered,[]},
  {applications, [kernel,stdlib]},
  {mod, {rtp,[]}}
