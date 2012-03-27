@@ -9,3 +9,14 @@ This software allows you to:
 
 
 Clone it, make, edit self-descriptive publisher.conf and use runit folder to start it via "runit" software.
+
+
+Debian installation
+-------------------
+
+```
+apt-get install git libasound2-dev libfaac-dev libx264-dev libswscale-dev
+git clone git://github.com/erlyvideo/publisher.git
+cd publisher
+make
+```

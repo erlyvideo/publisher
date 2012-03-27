@@ -11,9 +11,13 @@ main([]) ->
   %io:format("~p~n", [erlang:system_info(scheduler_bind_type)]),
   %io:format("~p~n", [erlang:system_info(multi_scheduling)]),
   %io:format("~p~n", [{erlang:system_info(smp_support),erlang:system_info(threads),erlang:system_info(thread_pool_size),erlang:system_info(schedulers_online)}]),
-  code:add_pathz("apps/publisher/ebin"),
-  Root = filename:join(filename:dirname(escript:script_name()), ".."),
-  code:add_pathz(Root++"/ebin"),
+  Root = filename:dirname(escript:script_name()),
+  [code:add_pathz(P) || P <- filelib:wildcard(Root ++ "/apps/*/ebin")],
+  [code:add_pathz(P) || P <- filelib:wildcard(Root ++ "/deps/*/ebin")],
+  case file:read_file_info(Root ++ "/publisher.conf") of
+    {error, enoent} -> os:cmd("cp "++Root++"/publisher.conf.sample "++Root++"/publisher.conf");
+    _ -> ok
+  end,
   {ok, Pid} = publisher:run(),
   erlang:monitor(process, Pid),
   receive
