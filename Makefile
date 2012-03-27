@@ -4,7 +4,8 @@ all: compile
 
 
 compile: 
-	find . -name '._*' -delete
+	@find . -name '._*' -delete
+	[ -d deps/alsa ] || ./rebar get-deps
 	./rebar compile
 
 clean:
