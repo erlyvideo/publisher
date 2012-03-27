@@ -77,7 +77,19 @@ init([Options]) ->
   put(debug, proplists:get_value(debug, Options)),
   {ok, #encoder{options = Options}}.
 
-ensure_capture(#encoder{start = undefined} = Encoder1) ->
+ensure_capture(#encoder{start = undefined, clients = Clients, options = Options} = Encoder1) ->
+  VideoCapture = proplists:get_value(video_capture, Options),
+  {Width, Height} = proplists:get_value(size, VideoCapture),
+  Meta = [
+    {framerate, proplists:get_value(fps, VideoCapture)}, {width, Width}, {height, Height},
+    {videocodecid, <<"avc1">>}, {audiocodecid, <<"mp4a">>}
+  ],
+  MetaFrame = #video_frame{
+    content = metadata,
+    dts = 0, pts = 0,
+    body = [<<"@setDataFrame">>,<<"onMetaData">>, {object, Meta}]
+  },
+  [Client ! MetaFrame || Client <- Clients],
   Encoder2 = start_h264_capture(Encoder1),
   Encoder3 = start_aac_capture(Encoder2),
   Encoder3#encoder{
