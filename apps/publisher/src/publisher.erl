@@ -37,7 +37,6 @@ run() ->
   [code:add_pathz(P) || P <- filelib:wildcard("/opt/erlyvideo/lib/*/ebin")],
   application:start(sasl),
   application:start(rtmp),
-  application:start(gproc),
   application:start(publisher),
   io:format("Starting~n"),
   {ok, Config, ConfigPath} = file:path_consult([".", "/media/usb", "/etc/publisher"], "publisher.conf"),

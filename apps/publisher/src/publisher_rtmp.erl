@@ -42,7 +42,7 @@
 
 
 start_link(Type, RTMP, Options) ->
-  gen_server:start_link(?MODULE, [Type, RTMP, Options], []).
+  gen_server:start_link({local, publisher_instance}, ?MODULE, [Type, RTMP, Options], []).
 
 
 stop(RTMP) ->
@@ -51,11 +51,10 @@ stop(RTMP) ->
 -define(RECHECK_SCHEDULE, 10000).
 
 
-init([Type, RTMP, Options]) ->
-  gproc:add_local_name({publisher,RTMP}),
+init([Type, URL, Options]) ->
   Publisher = case Type of
-    passive -> init_passive(RTMP, Options);
-    active  -> init_active(RTMP, Options)
+    passive -> init_passive(URL, Options);
+    active  -> init_active(URL, Options)
   end,
   timer:send_interval(10000, dump_status),
   {ok, Publisher}.

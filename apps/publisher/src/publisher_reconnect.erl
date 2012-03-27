@@ -76,7 +76,7 @@ handle_info(check, #reconnector{url = URL, schedule_url = ScheduleUrl, options =
     undefined -> true;
     _ -> publish_schedule:is_streaming_scheduled(Schedule)
   end,
-  OldPid = gproc:lookup_local_name({publisher,URL}),
+  OldPid = whereis(publisher_instance),
   PublisherIsActive = is_alive(OldPid),
   
   timer:send_after(?CHECK_TIMEOUT, check),
