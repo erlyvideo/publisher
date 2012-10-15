@@ -31,11 +31,14 @@
 -export([publish/3, listen/2, encode/2, run/0]).
 
 run() ->
+  application:load(lager),
+  application:set_env(lager,handlers,[{lager_console_backend,info}]),
+  lager:start(),
+
   os:putenv("LD_LIBRARY_PATH", "deps/h264/priv"),
   [code:add_pathz(P) || P <- filelib:wildcard("deps/*/ebin")],
   [code:add_pathz(P) || P <- filelib:wildcard("../erlyvideo/apps/*/ebin")],
   [code:add_pathz(P) || P <- filelib:wildcard("/opt/erlyvideo/lib/*/ebin")],
-  application:start(sasl),
   application:start(rtmp),
   application:start(publisher),
   io:format("Starting~n"),

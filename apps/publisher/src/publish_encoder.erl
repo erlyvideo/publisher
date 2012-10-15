@@ -77,19 +77,19 @@ init([Options]) ->
   put(debug, proplists:get_value(debug, Options)),
   {ok, #encoder{options = Options}}.
 
-ensure_capture(#encoder{start = undefined, clients = Clients, options = Options} = Encoder1) ->
-  VideoCapture = proplists:get_value(video_capture, Options),
-  {Width, Height} = proplists:get_value(size, VideoCapture),
-  Meta = [
-    {framerate, proplists:get_value(fps, VideoCapture)}, {width, Width}, {height, Height},
-    {videocodecid, <<"avc1">>}, {audiocodecid, <<"mp4a">>}
-  ],
-  MetaFrame = #video_frame{
-    content = metadata,
-    dts = 0, pts = 0,
-    body = [<<"@setDataFrame">>,<<"onMetaData">>, {object, Meta}]
-  },
-  [Client ! MetaFrame || Client <- Clients],
+ensure_capture(#encoder{start = undefined, clients = _Clients, options = _Options} = Encoder1) ->
+  % VideoCapture = proplists:get_value(video_capture, Options),
+  % {Width, Height} = proplists:get_value(size, VideoCapture),
+  % Meta = [
+  %   {framerate, proplists:get_value(fps, VideoCapture)}, {width, Width}, {height, Height},
+  %   {videocodecid, <<"avc1">>}, {audiocodecid, <<"mp4a">>}
+  % ],
+  % MetaFrame = #video_frame{
+  %   content = metadata,
+  %   dts = 0, pts = 0,
+  %   body = [<<"@setDataFrame">>,<<"onMetaData">>, {object, Meta}]
+  % },
+  % [Client ! MetaFrame || Client <- Clients],
   Encoder2 = start_h264_capture(Encoder1),
   Encoder3 = start_aac_capture(Encoder2),
   Encoder3#encoder{
@@ -121,14 +121,13 @@ start_uvc_capture(#encoder{clients = Clients, last_dts = DTS} = Encoder, VideoOp
 
 start_rtsp_capture(#encoder{clients = Clients, last_dts = DTS} = Encoder, VideoOptions) ->
   application:start(log4erl),
-  ems_log:start(),
   application:start(rtsp),
-  {ok, RTSP, MediaInfo} = rtsp_socket:read(proplists:get_value(url,VideoOptions), [{consumer,self()}]),
+  {ok, RTSP} = rtsp_reader:start_link(proplists:get_value(url,VideoOptions), [{consumer,self()}]),
+  {ok, MediaInfo} = rtsp_reader:media_info(RTSP),
   % {ok, Media} = ems_media:start_link(Type, VideoOptions),
   % #media_info{video = VideoInfo} = ems_media:media_info(Media),
-  #media_info{video = VideoInfo} = MediaInfo,
-  length(VideoInfo) == 1 orelse erlang:error(invalid_video_stream),
-  [#stream_info{} = VideoStream] = VideoInfo,
+  #media_info{streams = Streams} = MediaInfo,
+  [VideoStream] = [S || #stream_info{codec = h264} = S <- Streams],
   erlang:monitor(process, RTSP),
   % ems_media:play(Media, []),
   VConfig = video_frame:config_frame(VideoStream),

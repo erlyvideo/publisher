@@ -15,11 +15,11 @@ get-deps:
 	./rebar get-deps
 
 start:
-	run_erl -daemon /tmp/ /tmp/ ./test.erl
+	run_erl -daemon /tmp/ /tmp/ ./start
 
 
 attach:
-	/opt/erlyvideo/erts-5.8.4/bin/to_erl /tmp/
+	to_erl /tmp/
 
 image:
 	rm -rf root
