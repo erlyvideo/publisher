@@ -10,7 +10,8 @@ fi
 # fi
 
 apt-get update
-apt-get -y install erlang-base-hipe erlang-eunit erlang-os-mon erlang-runtime-tools erlang-tools erlang-crypto
+apt-get -y install erlang-base-hipe erlang-eunit erlang-os-mon erlang-runtime-tools erlang-tools erlang-crypto 
+apt-get -y install libasound-dev build-essential libx264-dev libswscale-dev
 # apt-get -y install rebar build-essential
 
 

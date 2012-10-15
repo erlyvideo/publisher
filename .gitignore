@@ -3,3 +3,4 @@ deps
 publisher.conf
 
 log
+.vagrant
