@@ -5,8 +5,11 @@ all: compile
 
 compile: 
 	@find . -name '._*' -delete
-	[ -d deps/alsa ] || ./rebar get-deps
+	#[ -d deps/alsa ] || ./rebar get-deps
 	./rebar compile
+
+linux:
+	./rebar -C rebar-linux.config get-deps compile
 
 clean:
 	./rebar clean
