@@ -141,7 +141,7 @@ read_properties(#mp3_media{reader = {Module,Device}, header_size = Offset, path 
 media_info(#mp3_media{duration = Duration, metadata = Metadata} = Media) ->
   AudioStream = #stream_info{
     content = audio,
-    stream_id = 1,
+    track_id = 1,
     codec = mp3,
     config = undefined,
     params = #audio_params{channels = Media#mp3_media.channels, sample_rate = Media#mp3_media.sample_rate}
@@ -149,10 +149,9 @@ media_info(#mp3_media{duration = Duration, metadata = Metadata} = Media) ->
   
   #media_info{
     flow_type = file,
-    audio = [AudioStream],
-    video = [],
-    metadata = Metadata,
-    duration = Duration
+    streams   = [AudioStream],
+    options   = Metadata,
+    duration  = Duration
   }.
   
 

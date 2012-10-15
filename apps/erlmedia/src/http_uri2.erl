@@ -35,11 +35,11 @@ parse(AbsURI) when is_list(AbsURI) ->
 	{error, Reason} ->
 	    {error, Reason};
 	{Scheme, Rest} ->
-	    case (catch parse_uri_rest(Scheme, Rest)) of
+	    case parse_uri_rest(Scheme, Rest) of
 		{UserInfo, Host, Port, Path, Query} ->
 		    {Scheme, UserInfo, Host, Port, Path, Query};
-		_  ->
-		    {error, {malformed_url, AbsURI}}
+		_Else  ->
+		    {error, {malformed_url, AbsURI, _Else}}
 	    end
     end.
 
@@ -182,8 +182,18 @@ default_port(https) ->
 default_port(rtmp) ->
     1935;
 default_port(rtsp) ->
-    554.
+    554;
+default_port(hls) ->
+    80;
+default_port(hds) ->
+    80;
+default_port(tshttp) ->
+    80;
+default_port(_) ->
+    undefined.
 
+int_port(undefined) ->
+    undefined;
 int_port(Port) when is_integer(Port) ->
     Port;
 int_port(Port) when is_list(Port) ->

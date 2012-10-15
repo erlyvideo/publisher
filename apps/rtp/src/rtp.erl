@@ -47,13 +47,13 @@
 %%
 %% @end
 %%--------------------------------------------------------------------
-init(Location, #media_info{audio = Audio, video = Video} = _MediaInfo)
+init(Location, #media_info{streams = Streams1} = _MediaInfo)
   when Location == local orelse
        Location == remote ->
-  Streams = lists:sort(fun(#stream_info{stream_id = Id1}, #stream_info{stream_id = Id2}) ->
+  Streams = lists:sort(fun(#stream_info{track_id = Id1}, #stream_info{track_id = Id2}) ->
     Id1 =< Id2
-  end, Audio ++ Video),
-  ContentMap = [{Content,Id} || #stream_info{content = Content, stream_id = Id} <- Streams],
+  end, Streams1),
+  ContentMap = [{Content,Id} || #stream_info{content = Content, track_id = Id} <- Streams],
   #rtp_state{streams = Streams, location = Location, content_map = ContentMap}.
 
 %%--------------------------------------------------------------------
@@ -287,8 +287,9 @@ rtcp(<<_, ?RTCP_SR, _/binary>> = SR, #rtp_channel{} = RTP) ->
 rtcp(<<_, ?RTCP_RR, _/binary>>, #rtp_channel{} = RTP) ->
   RTP;
 
-rtcp(<<_, ?RTCP_PT_APP, _/binary>>, #rtp_channel{} = RTP) ->
+rtcp(_, #rtp_channel{} = RTP) ->
   RTP.
+  
 
 
 

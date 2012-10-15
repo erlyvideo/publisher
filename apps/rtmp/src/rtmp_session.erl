@@ -52,12 +52,18 @@
 -export([connect/2]).
 -export([createStream/2, deleteStream/2, closeStream/2, releaseStream/2]).
 -export([receiveAudio/2, receiveVideo/2]).
+-export([get_field/2]).
+
 
 -include("meta_access.hrl").
 
 
 
+get_field(Pid, Field) when is_pid(Pid) ->
+  gen_server:call(Pid, {get_field, Field});
 
+get_field(#rtmp_session{player_info = Info} = State, Field) ->
+  proplists:get_value(Field, Info, get(State, Field)).
 
 
 
@@ -157,18 +163,13 @@ send(Session, Message) ->
 %% @private
 %%-------------------------------------------------------------------------
 handle_call({socket_ready, RTMP}, _From, State) ->
-  {address, {IP, Port}} = rtmp_socket:getopts(RTMP, address),
-  Addr = case IP of
-    undefined -> "0.0.0.0";
-    _ -> lists:flatten(io_lib:format("~p.~p.~p.~p", erlang:tuple_to_list(IP)))
-  end,
   erlang:monitor(process, RTMP),
   (catch ems_network_lag_monitor:watch(RTMP)),
   % rtmp_socket:setopts(RTMP, [{debug,true}]),
-  {reply, ok, State#rtmp_session{socket = RTMP, addr = Addr, port = Port}};
+  {reply, ok, State#rtmp_session{socket = RTMP}};
 
 handle_call({get_field, Field}, _From, State) ->
-  {reply, get(State, Field), State};
+  {reply, get_field(State, Field), State};
 
 
 handle_call(accept_connection, _From, Session) ->
@@ -211,7 +212,12 @@ handle_info({rtmp, Socket, #rtmp_message{} = Message}, State) ->
 
 handle_info({rtmp, Socket, connected}, State) ->
   rtmp_socket:setopts(Socket, [{active, once}]),
-  {noreply, State};
+  {address, {IP, Port}} = rtmp_socket:getopts(Socket, address),
+  Addr = case IP of
+    undefined -> "0.0.0.0";
+    _ -> lists:flatten(io_lib:format("~p.~p.~p.~p", erlang:tuple_to_list(IP)))
+  end,
+  {noreply, State#rtmp_session{addr = Addr, port = Port}};
 
 handle_info({rtmp, _Socket, timeout}, #rtmp_session{module = M} = State) ->
   {ok, State1} = M:handle_control(timeout, State),
@@ -220,18 +226,19 @@ handle_info({rtmp, _Socket, timeout}, #rtmp_session{module = M} = State) ->
 handle_info({'DOWN', _Ref, process, Socket, _Reason}, #rtmp_session{socket = Socket} = State) ->
   {stop, normal, State};
 
-handle_info({'DOWN', _Ref, process, PlayerPid, _Reason}, #rtmp_session{socket = Socket} = State) ->
+handle_info({'DOWN', _Ref, process, PlayerPid, _Reason} = Down, #rtmp_session{socket = Socket, module = M} = State) ->
   %FIXME: add passing down this message to plugins
-  case find_stream_by_pid(PlayerPid, State) of
+  State1 = case find_stream_by_pid(PlayerPid, State) of
     false ->
       ?D({"Unknown linked pid failed", PlayerPid, _Reason}),
-      {noreply, State};
+      State;
     #rtmp_stream{stream_id = StreamId} ->
       ?D({"Failed played stream", StreamId, PlayerPid}),
       rtmp_lib:play_failed(Socket, StreamId),
       flush_stream(StreamId),
-      {noreply, delete_stream(StreamId, State)}
-  end;
+      delete_stream(StreamId, State)
+  end,
+  M:handle_info(Down, State1);
 
 handle_info({Port, {data, _Line}}, State) when is_port(Port) ->
   % No-op. Just child program
@@ -428,30 +435,30 @@ handle_frame(#video_frame{} = Frame, Session) ->
     _ -> Session
   end.
 
-send_frame(#video_frame{content = Content, stream_id = StreamId, dts = DTS, pts = PTS} = Frame,
+send_frame(#video_frame{content = Content, stream_id = FrameId, dts = DTS, pts = PTS} = Frame,
              #rtmp_session{socket = Socket, bytes_sent = Sent, module = M} = State) ->
-  {State1, BaseDts, _Starting, Allow} = case rtmp_session:get_stream(StreamId, State) of
+  {State1, BaseDts, Allow, StreamId} = case rtmp_session:get_stream(FrameId, State) of
     #rtmp_stream{base_dts = DTS_, receive_audio = false} when Content == audio ->
-      {State, DTS_, false, false};
+      {State, DTS_, false, undefined};
     #rtmp_stream{base_dts = DTS_, receive_video = false} when Content == video ->
-      {State, DTS_, false, false};
+      {State, DTS_, false, undefined};
     #rtmp_stream{seeking = true} ->
-      {State, undefined, false, false};
-    #rtmp_stream{pid = undefined, started = false} = Stream ->
-      rtmp_lib:play_start(Socket, StreamId, 0, file),
+      {State, undefined, false, undefined};
+    #rtmp_stream{pid = undefined, stream_id = StreamId_, started = false} = Stream ->
+      rtmp_lib:play_start(Socket, StreamId_, 0, file),
       State1_ = set_stream(Stream#rtmp_stream{started = true, base_dts = DTS}, State),
-      {State1_, DTS, true, true};
-    #rtmp_stream{pid = Media, started = false, options = Options} = Stream ->
-      MediaType = proplists:get_value(type, ems_media:info(Media)),
-      rtmp_lib:play_start(Socket, StreamId, 0, MediaType),
+      {State1_, DTS, true, StreamId_};
+    #rtmp_stream{pid = Media, stream_id = StreamId_, started = false, options = Options} = Stream ->
+      MediaType = proplists:get_value(type, Options),
+      rtmp_lib:play_start(Socket, StreamId_, 0, MediaType),
       State1_ = set_stream(Stream#rtmp_stream{started = true, base_dts = DTS}, State),
       Duration = proplists:get_value(duration, Options),
-      {ok, State2_} = M:handle_control({start_stream, Media, [{duration,Duration},{stream_id,StreamId},{dts,DTS}]}, State1_),
-      {State2_, DTS, true, true};
-    #rtmp_stream{base_dts = DTS_} ->
-      {State, DTS_, false, true};
+      {ok, State2_} = M:handle_control({start_stream, Media, [{duration,Duration},{stream_id,StreamId_},{dts,DTS}]}, State1_),
+      {State2_, DTS, true, StreamId_};
+    #rtmp_stream{base_dts = DTS_, stream_id = StreamId_} ->
+      {State, DTS_, true, StreamId_};
     Else ->
-      erlang:error({old_frame, Else,StreamId})
+      erlang:error({old_frame, Else,FrameId})
   end,
 
   case Allow of
@@ -463,7 +470,7 @@ send_frame(#video_frame{content = Content, stream_id = StreamId, dts = DTS, pts 
       %     ok
       % end,
 
-      send_rtmp_frame(Socket, Frame#video_frame{dts = rtmp:justify_ts(DTS - BaseDts), pts = rtmp:justify_ts(PTS - BaseDts)}),
+      send_rtmp_frame(Socket, Frame#video_frame{dts = rtmp:justify_ts(DTS - BaseDts), pts = rtmp:justify_ts(PTS - BaseDts), stream_id = StreamId}),
     	Size = try iolist_size(Frame#video_frame.body) of
     	  S -> S
     	catch
@@ -533,7 +540,10 @@ find_stream_by_pid(PlayerPid, Streams) ->
   lists:keyfind(PlayerPid, #rtmp_stream.pid, Streams).
 
 get_stream(StreamId, #rtmp_session{streams1 = Streams}) ->
-  lists:keyfind(StreamId, #rtmp_stream.stream_id, Streams).
+  case lists:keyfind(StreamId, #rtmp_stream.stream_id, Streams) of
+    #rtmp_stream{} = Stream -> Stream;
+    false -> lists:keyfind(StreamId, #rtmp_stream.pid, Streams)
+  end.
 
 set_stream(#rtmp_stream{} = Stream, #rtmp_session{streams1 = Streams} = State) ->
   Streams1 = lists:ukeymerge(#rtmp_stream.stream_id, [Stream], Streams),

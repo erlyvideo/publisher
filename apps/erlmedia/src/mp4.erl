@@ -40,6 +40,7 @@
 -export([ftyp/2, moov/2, mvhd/2, trak/2, tkhd/2, mdia/2, mdhd/2, stbl/2, stsd/2, esds/2, avcC/2]).
 -export([btrt/2, stsz/2, stts/2, stsc/2, stss/2, stco/2, co64/2, smhd/2, minf/2, ctts/2, udta/2]).
 -export([mp4a/2, mp4v/2, avc1/2, s263/2, samr/2, free/2, wave/2]).
+-export([edts/2, elst/2]).
 -export([hdlr/2, vmhd/2, dinf/2, dref/2, 'url '/2, 'pcm '/2, 'spx '/2, '.mp3'/2]).
 -export([meta/2, ilst/2, covr/2, data/2, nam/2, alb/2]).
 
@@ -47,7 +48,6 @@
 
 -export([extract_language/1,get_coverart/1]).
 -export([parse_atom/2]).
--export([video_frame/2, video_frame/3]).
 
 -record(esds, {
   object_type,
@@ -60,8 +60,8 @@
 }).
 
 
--export([mp4_desc_length/1, open/2, read_frame/2, frame_count/1, seek/4, seek/5, mp4_read_tag/1]).
--export([keyframes/3]).
+-export([mp4_desc_length/1, open/2, read_frame/2, frame_count/1, seek/3, seek/4, mp4_read_tag/1]).
+-export([keyframes/2, data_borders/1, parse_esds/1]).
 -export([dump/1]).
 
 -define(FRAMESIZE, 32).
@@ -227,7 +227,7 @@ open(Reader, Options) ->
   #mp4_media{tracks = Tracks} = Mp4Media1 = read_srt_files(Mp4Media, proplists:get_value(url, Options)),
   {_T2, Index} = timer:tc(fun() -> build_index(Tracks) end),
   % ?D({mp4_init, {read_header,T1},{build_index,T2}}),
-  {ok, Mp4Media1#mp4_media{index = Index, reader = Reader, tracks = list_to_tuple(Tracks)}}.
+  {ok, Mp4Media1#mp4_media{index = Index, reader = Reader, tracks = list_to_tuple([T#mp4_track{index_info = []} || T <- Tracks])}}.
 
 get_coverart(Reader) ->
   {ok, MP4_Media} = read_header(#mp4_media{}, Reader, 0),
@@ -235,6 +235,9 @@ get_coverart(Reader) ->
     undefined -> <<>>;
     Bin -> Bin
   end.
+
+data_borders(#mp4_media{data_borders = DataBorders}) ->
+  DataBorders.
 
 read_header(Reader) ->
   read_header(#mp4_media{}, Reader, 0).
@@ -280,10 +283,10 @@ read_header(#mp4_media{additional = Additional} = Mp4Media, {Module, Device} = R
   case read_atom_header(Reader, Pos) of
     eof -> {ok, Mp4Media};
     {error, Reason} -> {error, Reason};
-    {atom, mdat, _Offset, all_file} ->
-      {ok, Mp4Media};
+    {atom, mdat, Offset, all_file} ->
+      {ok, Mp4Media#mp4_media{data_borders = {Offset, eof}}};
     {atom, mdat, Offset, Length} ->
-      read_header(Mp4Media, Reader, Offset + Length);
+      read_header(Mp4Media#mp4_media{data_borders = {Offset, Length}}, Reader, Offset + Length);
     {atom, _AtomName, Offset, 0} -> 
       read_header(Mp4Media, Reader, Offset);
     {atom, AtomName, Offset, Length} -> 
@@ -330,144 +333,62 @@ read_atom_header({Module, Device}, Pos) ->
       {error, Error}
   end.
 
-keyframes(#mp4_media{} = Media, Audio, Video) ->
-  keyframes(Media, Audio, Video, 0, -1, []).
+keyframes(#mp4_media{} = Media, TrackIds) ->
+  keyframes(Media, TrackIds, 0, -1, []).
 
-keyframes(Media, Audio, Video, Id, PrevDTS, Keyframes) ->
-  case read_frame(Media, #frame_id{id = Id, a = Audio, v = Video}) of
+keyframes(Media, TrackIds, Id, PrevDTS, Keyframes) ->
+  case read_frame(Media, #frame_id{id = Id, tracks = TrackIds}) of
     #mp4_frame{keyframe = true, dts = DTS} when DTS > PrevDTS ->
-      keyframes(Media, Audio, Video, Id + 1, DTS, [{DTS,Id}|Keyframes]);
+      keyframes(Media, TrackIds, Id + 1, DTS, [{DTS,Id}|Keyframes]);
     #mp4_frame{} ->
-      keyframes(Media, Audio, Video, Id + 1, PrevDTS, Keyframes);
+      keyframes(Media, TrackIds, Id + 1, PrevDTS, Keyframes);
     eof ->
       lists:reverse(Keyframes)
   end.
 
 
-seek(#mp4_media{} = Media, Audio, Video, Timestamp) ->
-  seek(Media, Audio, Video, Timestamp, keyframe).
+seek(#mp4_media{} = Media, Tracks, Timestamp) ->
+  seek(Media, Tracks, Timestamp, keyframe).
 
-seek(#mp4_media{} = Media, Audio, undefined, Timestamp, keyframe) ->
-  seek(Media, Audio, undefined, Timestamp, frame);
-
-seek(#mp4_media{} = Media, Audio, Video, Timestamp, SeekMode) ->
-  A = case SeekMode of
-    keyframe -> undefined;
-    _ -> Audio
+seek(#mp4_media{tracks = Tracks} = Media, TrackIds1, Timestamp, SeekMode) ->
+  TrackIds2 = case SeekMode of
+    keyframe ->
+      [Id || #mp4_track{track_id = Id, content = video} <- [element(I, Tracks) || I <- TrackIds1]];
+    _ ->
+      TrackIds1
   end,
-  seek(Media, A, Video, Timestamp, 0, undefined, SeekMode).
+  seek(Media, TrackIds2, Timestamp, 0, undefined, SeekMode).
 
-seek(Media, Audio, Video, Timestamp, Id, Found, SeekMode) ->
-  case read_frame(Media, #frame_id{id = Id, a = Audio, v = Video}) of
+seek(Media, Tracks, Timestamp, Id, Found, SeekMode) ->
+  case read_frame(Media, #frame_id{id = Id, tracks = Tracks}) of
     #mp4_frame{dts = DTS} when DTS >= Timestamp andalso SeekMode == frame -> {Id,DTS};
     #mp4_frame{keyframe = true, dts = DTS} when DTS > Timestamp andalso SeekMode == keyframe -> Found;
-    #mp4_frame{keyframe = true, dts = DTS} when SeekMode == keyframe -> seek(Media, Audio, Video, Timestamp, Id+1, {Id,DTS}, SeekMode);
-    #mp4_frame{dts = DTS} when SeekMode == frame -> seek(Media, Audio, Video, Timestamp, Id+1, {Id, DTS}, SeekMode);
-    #mp4_frame{dts = _DTS} -> seek(Media, Audio, Video, Timestamp, Id+1, Found, SeekMode);
+    #mp4_frame{keyframe = true, dts = DTS} when SeekMode == keyframe -> seek(Media, Tracks, Timestamp, Id+1, {Id,DTS}, SeekMode);
+    #mp4_frame{dts = DTS} when SeekMode == frame -> seek(Media, Tracks, Timestamp, Id+1, {Id, DTS}, SeekMode);
+    #mp4_frame{dts = _DTS} -> seek(Media, Tracks, Timestamp, Id+1, Found, SeekMode);
     eof -> undefined
   end.
 
-
-read_frame(#mp4_media{tracks = Tracks}, {track, TrackId, config}) ->
-  #mp4_track{content = Content, codec = Codec, decoder_config = Config} = element(TrackId, Tracks),
-  #video_frame{
-   	content = Content,
-   	flavor  = config,
-		dts     = 0,
-		pts     = 0,
-		body    = Config,
-		codec   = Codec
-	};
-
-read_frame(#mp4_media{tracks = Tracks} = Media, {track, TrackId, Id}) ->
-  #mp4_track{content = Content} = Track = element(TrackId, Tracks),
-  case unpack_frame(Track, Id) of
-    eof -> eof;
-    Mp4Frame -> video_frame(Media, Mp4Frame#mp4_frame{content = Content})
-  end;
-
-read_frame(#mp4_media{tracks = Tracks, index = Index} = Media, #frame_id{id = Id,a = Audio,v = Video, t = Text} = FrameId) ->
+read_frame(#mp4_media{tracks = Tracks, index = Index} = Media, #frame_id{id = Id, tracks = TrackIds} = FrameId) ->
   IndexOffset = Id*4,
-  
+
   case Index of
-    <<_:IndexOffset/binary, Audio, _:1, AudioId:23, _/binary>> -> 
-      (unpack_frame(element(Audio,Tracks), AudioId))#mp4_frame{next_id = FrameId#frame_id{id = Id+1}, content = audio};
-    <<_:IndexOffset/binary, Text, _:1, TextId:23, _/binary>> -> 
-       %?D({read_text,Text,TextId}),
-      (unpack_frame(element(Text,Tracks), TextId))#mp4_frame{next_id = FrameId#frame_id{id = Id+1}, content = text};
-    <<_:IndexOffset/binary, Video, _:1, VideoId:23, _/binary>> -> 
-      (unpack_frame(element(Video,Tracks), VideoId))#mp4_frame{next_id = FrameId#frame_id{id = Id+1}, content = video};
+    <<_:IndexOffset/binary, TrackId, _:1, ElementId:23, _/binary>> ->
+      case lists:member(TrackId, TrackIds) of
+        true ->
+          (unpack_frame(element(TrackId,Tracks), ElementId))#mp4_frame{next_id = FrameId#frame_id{id = Id+1}, track_id = TrackId};
+        false ->
+          read_frame(Media, FrameId#frame_id{id = Id + 1})
+      end;
     <<_:IndexOffset/binary>> -> 
-      eof;
-    <<_:IndexOffset/binary, _OtherTrackId, _K:1, _FrameIndex:23, _/binary>> ->
-      read_frame(Media, FrameId#frame_id{id = Id+1})
+      eof
   end.
 
-
-
-read_data(#mp4_media{reader = {M, Dev}}, Offset, Size) ->
-  case M:pread(Dev, Offset, Size) of
-    {ok, Data} ->
-      {ok, Data};
-    Else -> Else
-  end.
-
-
-video_frame(#mp4_media{} = Media, #mp4_frame{offset = Offset, size = Size, content = Content, next_id = Next} = Frame) ->
-  case read_data(Media, Offset, Size) of
-		{ok, Data} ->
-		  VideoFrame = video_frame(Content, Frame, Data),
-		  VideoFrame#video_frame{next_id = Next};
-    eof -> eof;
-    {error, Reason} -> {error, Reason}
-  end.
-
-video_frame(video, #mp4_frame{dts = DTS, keyframe = Keyframe, pts = PTS, codec = Codec}, Data) ->
-  #video_frame{
-   	content = video,
-		dts     = DTS,
-		pts     = PTS,
-		body    = Data,
-		flavor  = case Keyframe of
-		  true ->	keyframe;
-		  _ -> frame
-	  end,
-		codec   = Codec
-  };  
-
-video_frame(text, #mp4_frame{dts = DTS, pts = PTS, codec = Codec}, Data) ->
-  #video_frame{
-   	content = metadata,
-		dts     = DTS,
-		pts     = DTS,
-		flavor  = frame,
-		codec   = Codec,
-		body    = [<<"onTextData">>, {object, [
-		  {name, onCuePoint},
-		  {type, event},
-		  {'begin', DTS},
-  		{'end', PTS},
-		  {text, Data}
-		]}]
-  };  
-
-video_frame(audio, #mp4_frame{dts = DTS, codec = Codec}, Data) ->
-  #video_frame{       
-   	content = audio,
-		dts     = DTS,
-		pts     = DTS,
-  	body    = Data,
-  	flavor  = frame,
-	  codec	  = Codec,
-	  sound	  = {stereo, bit16, rate44}
-  }.
-
-  
   
 unpack_frame(#mp4_track{frames = Frames, content = text, codec = _Codec}, Id) when Id < length(Frames) ->
   lists:nth(Id+1, Frames);
   
-unpack_frame(#mp4_track{frames = Frames, codec = Codec}, Id) when Id*?FRAMESIZE < size(Frames) ->
+unpack_frame(#mp4_track{frames = Frames, content = Content, codec = Codec}, Id) when Id*?FRAMESIZE < size(Frames) ->
   FrameOffset = Id*?FRAMESIZE,
 
   <<_:FrameOffset/binary, FKeyframe:1, Size:63, Offset:64, DTS:64/float, PTS:64/float, _/binary>> = Frames,
@@ -475,9 +396,7 @@ unpack_frame(#mp4_track{frames = Frames, codec = Codec}, Id) when Id*?FRAMESIZE 
     1 -> true;
     0 -> false
   end,
-  #mp4_frame{id = Id, dts = DTS, pts = PTS, size = Size, offset = Offset, keyframe = Keyframe, codec = Codec};
-  
-unpack_frame(#mp4_track{frames = Frames}, Id) when Id*?FRAMESIZE == size(Frames) -> eof.
+  #mp4_frame{id = Id, dts = DTS, pts = PTS, size = Size, offset = Offset, keyframe = Keyframe, codec = Codec, content = Content}.
 
 
 frame_count(undefined) -> 0;
@@ -755,6 +674,17 @@ smhd(<<0:8, _Flags:3/binary, _Balance:16/big-signed-integer, _Reserve:2/binary>>
 minf(Atom, Mp4Track) ->
   parse_atom(Atom, Mp4Track).
 
+
+edts(Atom, Mp4Track) ->
+  parse_atom(Atom, Mp4Track).
+
+elst(<<Version, _Flags:24, _EntryCount:32, ELST/binary>>, Mp4Track) ->
+  Records = case Version of
+    0 -> [{Duration, Time, Rate} || <<Duration:32, Time:32, Rate:16, _Fraction:16>> <= ELST];
+    1 -> [{Duration, Time, Rate} || <<Duration:64, Time:64, Rate:16, _Fraction:16>> <= ELST]
+  end,
+  Mp4Track#mp4_track{elst = Records}.
+
 %% Video Media Header Box
 vmhd(<<_Version:32, _Mode:16, _R:16, _G:16, _B:16>>, Mp4Track) ->
   % _VMHD = {vmhd, Version, Mode, R, G, B},
@@ -854,21 +784,24 @@ btrt(<<_BufferSize:32, MaxBitRate:32, AvgBitRate:32>>, #mp4_track{} = Mp4Track) 
 %% Look how to parse it at vlc/modules/demux/ts.c:2400
 %%
 
+parse_esds(Data) -> config_from_esds_tag(Data).
+
 config_from_esds_tag(Data) ->
   config_from_esds_tag(Data, #esds{}).
 
 config_from_esds_tag(Data, ESDS) ->
   case mp4_read_tag(Data) of
-    {?MP4ESDescrTag, <<_ID1:16, _Priority1, Description/binary>>, <<>>} ->
+    % Good description is vlc/modules/mux/ts.c:2068 GetPMTmpeg4
+    {es_descr, <<_ID1:16, _Priority1, Description/binary>>, <<>>} ->
       config_from_esds_tag(Description, ESDS);
-    {?MP4DecConfigDescrTag, <<ObjectType, StreamType, BufferSize:24, MaxBitrate:32, AvgBitrate:32, Rest1/binary>>, Rest2} ->
+    {decoder_config, <<ObjectType, StreamType, BufferSize:24, MaxBitrate:32, AvgBitrate:32, Rest1/binary>>, Rest2} ->
       ESDS1 = config_from_esds_tag(Rest1, ESDS#esds{
         object_type = mp4_object_type(ObjectType), stream_type = StreamType, buffer_size = BufferSize,
         max_bitrate = MaxBitrate, avg_bitrate = AvgBitrate}),
       config_from_esds_tag(Rest2, ESDS1);
-    {?MP4DecSpecificDescrTag, <<Config/binary>>, _} ->
+    {decoder_specific, <<Config/binary>>, _} ->
       ESDS#esds{specific = Config};
-    {?MP4Unknown6Tag, _Body, Rest} ->
+    {sl, _, Rest} ->
       config_from_esds_tag(Rest, ESDS);
     {_Tag, _Data, Rest} ->
       ?D({"Unknown esds tag. Send this line to max@maxidoors.ru: ", _Tag, _Data}),
@@ -924,8 +857,16 @@ mp4_desc_length(<<1:1, Length3:7, 1:1, Length2:7, 1:1, Length1:7, 0:1, Length:7,
 mp4_read_tag(<<>>) ->
   undefined;
 
-mp4_read_tag(<<Tag, Data/binary>>) ->
+mp4_read_tag(<<TagId, Data/binary>>) ->
   {Body, Rest} = mp4_desc_length(Data),
+  Tag = case TagId of
+    2 -> es;
+    3 -> es_descr;
+    4 -> decoder_config;
+    5 -> decoder_specific;
+    6 -> sl;
+    _ -> TagId
+  end,
   {Tag, Body, Rest}.
 
 
@@ -1032,7 +973,7 @@ stco(<<0:8, _Flags:3/binary, OffsetCount:32, Offsets/binary>>, Mp4Track) ->
   Mp4Track#mp4_track{chunk_offsets = [Offset || <<Offset:32>> <= Offsets]}.
 
 co64(<<0:8, _Flags:3/binary, OffsetCount:32, Offsets/binary>>, Mp4Track) ->
-  ?D({co64,OffsetCount}),
+  % ?D({co64,OffsetCount}),
   read_co64(Offsets, OffsetCount, Mp4Track).
 
 read_co64(<<>>, 0, #mp4_track{chunk_offsets = ChunkOffsets} = Mp4Track) ->
@@ -1119,7 +1060,7 @@ fill_track(Frames, IndexInfo, TrackId,SampleSizes, Offset, ChunkOffsets, ChunkSi
   {Size, SZ1} = case SampleSizes of
     [Size_|SampleSizes_] -> {Size_, SampleSizes_};
     Size_ -> {Size_, Size_}
-  end,  
+  end,
   fill_track(<<Frames/binary, FKeyframe:1, Size:63, Offset:64, FDTS:64/float, FPTS:64/float>>, [{FDTS, <<TrackId, FKeyframe:1, Id:23>>}|IndexInfo], TrackId,
              SZ1, Offset+Size, ChunkOffsets, ChunkSize-1, ChunkSizes, KF1, TS1, DTS1, Comp1, Timescale, Id+1).
 
@@ -1162,8 +1103,8 @@ build_index(Tracks) when is_tuple(Tracks) ->
 %   ?assertEqual(<<1, 0:24, 2, 0:24, 1, 1:24, 2, 1:24, 2, 2:24, 1, 2:24>>, build_index(test_tracks())).
 
 mp4_desc_tag_with_length_test() ->
-  ?assertEqual({3, <<0,2,0,4,13,64,21,0,0,0,0,0,100,239,0,0,0,0,6,1,2>>, <<>>}, mp4_read_tag(<<3,21,0,2,0,4,13,64,21,0,0,0,0,0,100,239,0,0,0,0,6,1,2>>)),
-  ?assertEqual({4, <<64,21,0,0,0,0,0,100,239,0,0,0,0>>, <<6,1,2>>}, mp4_read_tag(<<4,13,64,21,0,0,0,0,0,100,239,0,0,0,0,6,1,2>>)).
+  ?assertEqual({es_descr, <<0,2,0,4,13,64,21,0,0,0,0,0,100,239,0,0,0,0,6,1,2>>, <<>>}, mp4_read_tag(<<3,21,0,2,0,4,13,64,21,0,0,0,0,0,100,239,0,0,0,0,6,1,2>>)),
+  ?assertEqual({decoder_config, <<64,21,0,0,0,0,0,100,239,0,0,0,0>>, <<6,1,2>>}, mp4_read_tag(<<4,13,64,21,0,0,0,0,0,100,239,0,0,0,0,6,1,2>>)).
   
 
 unpack_chunk_samples_test() ->
@@ -1180,22 +1121,22 @@ esds_tag1_test() ->
 esds_tag2_test() ->
   ?assertEqual(#esds{object_type = aac, stream_type = 21, buffer_size = 428, max_bitrate = 139608, avg_bitrate = 101944, specific = <<18,16>>}, config_from_esds_tag(<<3,25,0,0,0,4,17,64,21,0,1,172,0,2,33,88,0,1,142,56,5,2,18,16,6,1,2>>)).
 
-get_coverart_validMeta_test () ->
-  {ok,Dev} = file:open("test/files/tag_coverart.mp4",[read,raw,binary]),
-  Reader = {file,Dev},
-  Metadata = get_coverart(Reader),
-  ?assertMatch(<<_:6/binary,"JFIF",_/binary>>, Metadata).
-
-get_coverart_sizeMeta_test () ->
-  {ok,Dev} = file:open("test/files/tag_coverart.mp4",[read,raw,binary]),
-  Reader = {file,Dev},
-  Metadata = get_coverart(Reader),
-  ?assertEqual(114121,size(Metadata)).
-
-get_coverart_unvalid_test () ->
-  {ok,Dev} = file:open("test/files/without_coverart.mp4",[read,raw,binary]),
-  Reader = {file,Dev},
-  Metadata = get_coverart(Reader),
-  ?assertEqual(<<>>,Metadata).
+% get_coverart_validMeta_test () ->
+%   {ok,Dev} = file:open("test/files/tag_coverart.mp4",[read,raw,binary]),
+%   Reader = {file,Dev},
+%   Metadata = get_coverart(Reader),
+%   ?assertMatch(<<_:6/binary,"JFIF",_/binary>>, Metadata).
+% 
+% get_coverart_sizeMeta_test () ->
+%   {ok,Dev} = file:open("test/files/tag_coverart.mp4",[read,raw,binary]),
+%   Reader = {file,Dev},
+%   Metadata = get_coverart(Reader),
+%   ?assertEqual(114121,size(Metadata)).
+% 
+% get_coverart_unvalid_test () ->
+%   {ok,Dev} = file:open("test/files/without_coverart.mp4",[read,raw,binary]),
+%   Reader = {file,Dev},
+%   Metadata = get_coverart(Reader),
+%   ?assertEqual(<<>>,Metadata).
 
 

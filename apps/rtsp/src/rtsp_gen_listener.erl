@@ -1,11 +1,9 @@
 %%% @author     Max Lapshin <max@maxidoors.ru> [http://erlyvideo.org]
-%%% @copyright  2009 Max Lapshin
-%%% @doc        Special module, that can publish FLV file to erlyvideo. 
-%%% Required only for console tool ``contrib/rtmp_publish''
+%%% @copyright  2009-2010 Max Lapshin
+%%% @doc        Generic non-blocking listener
 %%% @reference  See <a href="http://erlyvideo.org/" target="_top">http://erlyvideo.org/</a> for more information
 %%% @end
-%%% @hidden
-%%% 
+%%%
 %%% This file is part of erlyvideo.
 %%% 
 %%% erlyvideo is free software: you can redistribute it and/or modify
@@ -22,63 +20,41 @@
 %%% along with erlyvideo.  If not, see <http://www.gnu.org/licenses/>.
 %%%
 %%%---------------------------------------------------------------------------------------
--module(rtmp_publish).
+-module(rtsp_gen_listener).
 -author('Max Lapshin <max@maxidoors.ru>').
 -behaviour(gen_server).
--include_lib("erlmedia/include/video_frame.hrl").
--include_lib("erlmedia/include/flv.hrl").
--include_lib("rtmp/include/rtmp.hrl").
 
 
 %% External API
--export([start_link/2, start_link/3, publish/3, continue_publish/1, wait_for_end/1]).
--export([send_frame/3]).
+-export([start_link/3, start_link/4]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
--record(publisher, {
-  path,
-  file,
-  offset = 0,
-  url,
-  host,
-  port,
-  server_path,
-  socket,
-  rtmp,
-  frame,
-  stream,
-  counter = 0,
-  no_timeout = false
-}).
 
 
-publish(Path, URL, Options) ->
-  start_link(Path, URL, Options).
-    
-continue_publish(Publisher) ->
-  Publisher ! timeout.  
+start_link(BindSpec, Callback, Args) ->
+  gen_server:start_link(?MODULE, [BindSpec, Callback, Args], []).
 
-wait_for_end(Pid) ->
-  erlang:monitor(process, Pid),
-  receive
-    {'DOWN', _Ref, process, Pid, normal} -> ok;
-    {'DOWN', _Ref, process, Pid, Reason} -> {error, Reason}
-  end.
-
-start_link(Path, URL) ->
-  start_link(Path, URL, []).
-
-start_link(Path, URL, Options) ->
-  gen_server:start_link(?MODULE, [Path, URL, Options], []).
-
+start_link(Name, BindSpec, Callback, Args) ->
+  gen_server:start_link({local, Name}, ?MODULE, [BindSpec, Callback, Args], []).
 
 
 
 %%%------------------------------------------------------------------------
 %%% Callback functions from gen_server
 %%%------------------------------------------------------------------------
+
+-record(listener, {
+  socket,
+  ref,
+  bindspec,
+  addr,
+  port,
+  callback,
+  args,
+  driver
+}).
 
 %%----------------------------------------------------------------------
 %% @spec (Port::integer()) -> {ok, State}           |
@@ -92,26 +68,9 @@ start_link(Path, URL, Options) ->
 %%----------------------------------------------------------------------
 
 
-init([Path, URL, Options]) ->
-	{ok, File} = file:open(Path, [read, binary, {read_ahead, 100000}, raw]),
-	{#flv_header{} = _Header, Offset} = flv:read_header(File),
-	{rtmp, _UserInfo, Host, Port, [$/ | ServerPath], _Query} = http_uri2:parse(URL),
-	Publisher = #publisher{path = Path, file = File, offset = Offset, url = URL, host = Host, port = Port, server_path = ServerPath},
-	
-	{ok, Socket} = gen_tcp:connect(Host, Port, [binary, {active, false}, {packet, raw}]),
-  {ok, RTMP} = rtmp_socket:connect(Socket),
-  io:format("Connecting to ~s~n", [URL]),
-  
-  {ok, Publisher#publisher{socket = Socket, rtmp = RTMP, counter = 1, no_timeout = proplists:get_value(no_timeout, Options, false)}}.
-
-
-read_frame(#publisher{file = File, offset = Offset} = Publisher) ->
-  case flv:read_frame(File, Offset) of
-    #video_frame{next_id = NextOffset} = Frame ->
-		  {Frame, Publisher#publisher{frame = Frame, offset = NextOffset}};
-    eof -> eof;
-    {error, Reason} -> {error, Reason}
-  end.
+init([BindSpec, Callback, Args]) ->
+  self() ! bind,
+  {ok, #listener{bindspec = BindSpec, callback = Callback, args = Args}}.
 
 %%-------------------------------------------------------------------------
 %% @spec (Request, From, State) -> {reply, Reply, State}          |
@@ -151,66 +110,53 @@ handle_cast(_Msg, State) ->
 %% @end
 %% @private
 %%-------------------------------------------------------------------------
-handle_info({rtmp, RTMP, connected}, #publisher{server_path = Path} = Publisher) ->
-  rtmp_socket:setopts(RTMP, [{active, true}]),
-  rtmp_lib:connect(RTMP, [{app, <<"live">>}, {tcUrl, <<"rtmp://localhost/live/a">>}]),
-  Stream = rtmp_lib:createStream(RTMP),
-  rtmp_lib:publish(RTMP, Stream, Path),
-  {Frame1, Publisher1} = read_frame(Publisher),
-  {Frame2, Publisher2} = read_frame(Publisher1),
-  {Frame3, Publisher3} = read_frame(Publisher2),
-  {_Frame, Publisher4} = read_frame(Publisher3),
-  [send_frame(RTMP, Stream, Frame) || Frame <- [Frame1, Frame2, Frame3]],
-  io:format("Connected, publishing to ~s (~p)~n", [Path, Stream]),
-  {noreply, Publisher4#publisher{stream = Stream}};
-
-handle_info(timeout, #publisher{frame = Frame1, stream = Stream, rtmp = RTMP, counter = Counter, no_timeout = NoTimeout} = Server) ->
-  send_frame(RTMP, Stream, Frame1),
+handle_info(bind, #listener{bindspec = BindSpec} = Server) ->
+  Opts1 = [binary, {packet, raw}, {reuseaddr, true}, 
+          {keepalive, true}, {backlog, 250}, {active, false}],
+  {BindAddr, Port} = case BindSpec of
+    P when is_number(P) -> {undefined, P};
+    {Addr, P} -> {Addr, P};
+    _ when is_list(BindSpec) ->
+      [AddrS, P] = string:tokens(BindSpec, ":"),
+      {ok, Addr} = inet_parse:address(AddrS),
+      {Addr, list_to_integer(P)}
+  end,
+  Opts2 = case BindAddr of
+    undefined -> Opts1;
+    _ -> [{ip,BindAddr}|Opts1]
+  end,
   
-  case read_frame(Server) of
-    {Frame2, Server2} ->
-      Timeout = case NoTimeout of
-        true -> 0;
-        _ -> Frame2#video_frame.dts - Frame1#video_frame.dts
+  case gen_tcp:listen(Port, Opts2) of
+    {ok, ListenSocket} ->
+      {ok, Ref} = prim_inet:async_accept(ListenSocket, -1),
+      {noreply, Server#listener{addr = BindAddr, port = Port, socket = ListenSocket, ref = Ref}};
+    {error, eaccess} ->
+      error_logger:error_msg("Error connecting to port ~p. Try to open it in firewall or run with sudo.\n", [Port]),
+      {stop, eaccess, Server};
+    {error, Reason} ->
+      {stop, Reason, Server}
+  end;
+    
+handle_info({inet_async, ListenSock, Ref, {ok, CliSocket}},
+            #listener{socket = ListenSock, ref = Ref, callback = Callback, args = Args} = State) ->
+  case set_sockopt(ListenSock, CliSocket) of
+    ok ->
+      case Callback:accept(CliSocket, Args) of
+        ok -> ok;
+        {error, Reason} ->
+          error_logger:error_msg("Error while accepting socket: ~p~n~p~n", [Reason, erlang:get_stacktrace()]),
+          gen_tcp:close(CliSocket)
       end,
-  
-      case Counter rem 1000 of
-        0 -> io:format("Publishing second ~p~n", [round(Frame1#video_frame.dts/1000)]);
-        _ -> ok
-      end,
-      {noreply, Server2#publisher{counter = Counter + 1}, Timeout};
-    eof ->
-      % io:format("Stopping on ~p~n", [Server#publisher.offset]),
-      {stop, normal, Server}
+      {ok, NewRef} = prim_inet:async_accept(ListenSock, -1),
+      {noreply, State#listener{ref = NewRef}};
+    {error, Reason} ->
+      error_logger:error_msg("Error setting socket options: ~p.\n", [Reason]),
+      {stop, Reason, State}
   end;
 
-handle_info({rtmp, _Socket, disconnect}, State) ->
-  {stop, normal, State};
-
-handle_info({rtmp, _Socket, _Message}, State) ->
-  io:format("RMTP: ~p~n", [_Message]),
-  self() ! timeout,
-  {noreply, State};
 
 handle_info(_Info, State) ->
-  {stop, {unknown_message,_Info}, State}.
-
-rtmp_message(#video_frame{dts = DTS, content = Type} = Frame, StreamId) ->
-  #rtmp_message{
-    channel_id = channel_id(Frame), 
-    timestamp = DTS,
-    type = Type,
-    stream_id = StreamId,
-    body = flv_video_frame:encode(Frame)}.
-
-send_frame(RTMP, Stream, Frame) ->
-  Message = rtmp_message(Frame, Stream),
-	rtmp_socket:send(RTMP, Message).
-  
-
-channel_id(#video_frame{content = metadata}) -> 4;
-channel_id(#video_frame{content = audio}) -> 5;
-channel_id(#video_frame{content = video}) -> 6.
+  {stop, {unknown_info, _Info}, State}.
 
 %%-------------------------------------------------------------------------
 %% @spec (Reason, State) -> any
@@ -231,3 +177,16 @@ terminate(_Reason, _State) ->
 %%-------------------------------------------------------------------------
 code_change(_OldVsn, State, _Extra) ->
   {ok, State}.
+
+
+set_sockopt(ListSock, CliSocket) ->
+  true = inet_db:register_socket(CliSocket, inet_tcp),
+  case prim_inet:getopts(ListSock, [active, nodelay, keepalive, delay_send, priority, tos]) of
+    {ok, Opts} ->
+      case prim_inet:setopts(CliSocket, Opts) of
+        ok    -> ok;
+        Error -> gen_tcp:close(CliSocket), Error
+      end;
+    Error ->
+      gen_tcp:close(CliSocket), Error
+  end.

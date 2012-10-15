@@ -33,7 +33,20 @@
 %% @doc Packs AAC frame into ADTS frame, suitable for transmitting in MPEG-TS PES or Shoutcast
 %% @end 
 %%--------------------------------------------------------------------
-pack_adts(Frame, #aac_config{type = ObjectType, sample_rate = Frequency, channels = ChannelConfig}) ->
+pack_adts(Frame, #aac_config{adts_header = CachedHeader} = Config) ->
+  Header = case CachedHeader of
+    undefined -> (cache_adts(Config))#aac_config.adts_header;
+    _ -> CachedHeader
+  end,
+  FrameLength = size(Frame) + 7,
+  % ADTS = 2#10001010101,
+  ADTS = 16#7ff,
+  Count = 0,
+  [<<Header/bitstring, FrameLength:13, % byte 5, 3 bits follow
+    ADTS:11, Count:2>>, % byte 6,7
+    Frame].
+
+cache_adts(#aac_config{type = ObjectType, sample_rate = Frequency, channels = ChannelConfig} = Config) ->
   ID = 0,
   Layer = 0,
   ProtectionAbsent = 1,
@@ -45,18 +58,10 @@ pack_adts(Frame, #aac_config{type = ObjectType, sample_rate = Frequency, channel
   Home = 0,
   Copyright = 0,
   CopyrightStart = 0,
-  FrameLength = size(Frame) + 7,
-  % ADTS = 2#10001010101,
-  ADTS = 16#7ff,
-  Count = 0,
-  <<16#FFF:12, ID:1, Layer:2, ProtectionAbsent:1,  % byte 1-2
+  ADTS = <<16#FFF:12, ID:1, Layer:2, ProtectionAbsent:1,  % byte 1-2
     Profile:2, SampleRate:4, Private:1, Channels:3,  % byte 3, 2 bits left
-    Original:1, Home:1, Copyright:1, CopyrightStart:1, % byte 4 and 2 bits follow
-    FrameLength:13, % byte 5, 3 bits follow
-    ADTS:11, Count:2, % byte 6,7
-    Frame/binary>>.
-
-
+    Original:1, Home:1, Copyright:1, CopyrightStart:1>>, % byte 4 and 2 bits follow
+  Config#aac_config{adts_header = ADTS}.
 
 
 %%--------------------------------------------------------------------
@@ -91,8 +96,8 @@ unpack_adts(<<16#FF>>) ->
 unpack_adts(<<>>) ->
   {more, undefined};
   
-unpack_adts(_) ->
-  {error, unknown}.
+unpack_adts(Body) ->
+  {error, Body}.
 
 %%--------------------------------------------------------------------
 %% @spec (Body::binary()) -> Config::aac_config()
@@ -117,7 +122,7 @@ extract_sample_rate(<<SampleRate:4, AAC/bitstring>>, Config) ->
   extract_channels(AAC, Config#aac_config{sample_rate = decode_sample_rate(SampleRate)}).
 
 extract_channels(<<Channels:4, FrameLength:1, _DependsCore:1, _Extension:1, _/binary>>, Config) ->
-  Config#aac_config{channels = decode_channels(Channels), channel_count = Channels, samples_per_frame = decode_samples_per_frame(FrameLength)}.
+  cache_adts(Config#aac_config{channels = decode_channels(Channels), channel_count = Channels, samples_per_frame = decode_samples_per_frame(FrameLength)}).
 
 
 %%--------------------------------------------------------------------

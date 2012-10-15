@@ -28,7 +28,7 @@
 -include_lib("erlmedia/include/video_frame.hrl").
 -include_lib("erlmedia/include/media_info.hrl").
 -include_lib("erlmedia/include/sdp.hrl").
--include("rtp.hrl").
+-include("../include/rtp.hrl").
 -include("log.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -41,7 +41,7 @@ rtp_state1() ->
   timescale = 90.0,
   codec = h264,
   buffer = undefined,
-  stream_info = #stream_info{content = video, stream_id = 2, codec = h264, config = 
+  stream_info = #stream_info{content = video, track_id = 2, codec = h264, config = 
                               <<1,77,0,30,255,225,0,21,39,77,64,30,169,24,60,23,
                                 252,184,3,80,96,16,107,108,43,94,247,192,64,1,0,
                                 4,40,222,9,200>>, options = [{control,"trackid=2"}]}}.
@@ -59,13 +59,15 @@ rtp_decode_test() ->
 %%%%%%%%%  Tests %%%%%%%%%
 
 decode_video_h264_test() ->
-  #media_info{video = [Video]} = sdp:decode(wirecast_sdp()),
+  #media_info{streams = Streams} = sdp:decode(wirecast_sdp()),
+  Video = hd([Stream || #stream_info{content = video} = Stream <- Streams]),
   ?assertMatch({ok, #rtp_channel{}, [
 
   ]}, rtp_decoder:decode(wirecast_video_rtp(), rtp_decoder:init(Video))).
 
 decode_audio_aac_test() ->
-  #media_info{audio = [Audio]} = sdp:decode(wirecast_sdp()),
+  #media_info{streams = Streams} = sdp:decode(wirecast_sdp()),
+  Audio = hd([Stream || #stream_info{content = audio} = Stream <- Streams]),
   Decoder = rtp:rtcp(wirecast_sr1(), rtp_decoder:init(Audio)),
   ?assertMatch({ok, #rtp_channel{}, [
     #video_frame{codec = aac, dts = 1300205206514.12},

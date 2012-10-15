@@ -20,6 +20,7 @@
 	codec 	       = undefined ::frame_codec()|undefined,
 	flavor         = undefined ::frame_flavor()|undefined,
 	sound          = {undefined, undefined, undefined} ::frame_sound() | undefined,
+	track_id       = undefined ::any(),
 	body           = <<>>      ::binary(),
 	next_id        = undefined ::any()
 }).

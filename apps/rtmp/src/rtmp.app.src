@@ -1,6 +1,6 @@
 {application, rtmp,
 [{description, "RTMP handling library"},
- {vsn, "2.10.18"},
+ {vsn, "3.1"},
  {registered,[]},
  {applications, [kernel,stdlib]},
  {mod, {rtmp_app,[]}}

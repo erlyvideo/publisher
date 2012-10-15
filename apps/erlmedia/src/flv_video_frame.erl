@@ -90,6 +90,7 @@ tag_to_video_frame(#flv_audio_tag{codec = Codec, rate = Rate, bitsize = Size, ch
                sound = {Channels, Size, Rate},
                pts = 0,
                dts = 0,
+               track_id = 200,
                body = Body};
 
 
@@ -99,11 +100,12 @@ tag_to_video_frame(#flv_video_tag{codec = Codec, flavor = Flavor, composition_ti
                codec = Codec,
                pts = CTime,
                dts = 0,
+               track_id = 201,
                body = Body};
 
 
 tag_to_video_frame(Metadata) ->
-  #video_frame{content = metadata, body = Metadata, dts = 0, pts = 0}.
+  #video_frame{content = metadata, body = Metadata, dts = 0, pts = 0, track_id = 202}.
 
 -spec(tag_to_video_frame(Tag::flv_specific_tag(), Timestamp::number()) -> video_frame()).
 tag_to_video_frame(Tag, Timestamp) ->
@@ -152,5 +154,5 @@ to_tag(#video_frame{content = Content, stream_id = StreamId, dts = DTS1} = Frame
 -include_lib("eunit/include/eunit.hrl").
 
 encode_video_test() ->
-  ?assertMatch(<<_/binary>>, encode({video_frame,video,1664.2277777772397,1664.2277777772397,1,h264,config,
-                                    {undefined,undefined,undefined},<<0,0,4,112,37,184,32,33,241,158,155,37,243>>,undefined})).
+  ?assertMatch(<<_/binary>>, encode(#video_frame{content = video,dts = 1664.2277777772397,pts = 1664.2277777772397,stream_id = 1,
+  codec = h264,flavor = config,sound = {undefined,undefined,undefined}, body = <<0,0,4,112,37,184,32,33,241,158,155,37,243>>})).

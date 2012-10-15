@@ -108,7 +108,7 @@ init_file(FileName, Options) ->
 	ok = filelib:ensure_dir(FileName),
 	SortBuffer = proplists:get_value(sort_buffer, Options, 0),
 	Mode = proplists:get_value(mode, Options, write),
-  case file:open(FileName, [Mode, {delayed_write, 1024, 50}]) of
+  case file:open(FileName, [Mode, {delayed_write, 1024, 50}, binary]) of
 		{ok, File} when Mode == append ->
 		  Duration = flv:duration({file,File}),
     	{ok, #flv_file_writer{writer = fun(Data) ->
@@ -193,11 +193,9 @@ store_message(Frame, #flv_file_writer{buffer = Buffer, buffer_size = Size} = Flv
 
 store_message(Frame, #flv_file_writer{buffer = Buffer} = FlvWriter) ->
   {ok, FlvWriter#flv_file_writer{buffer = [Frame|Buffer]}}.
+
+frame_sorter(Frame1, Frame2) -> flv:frame_sorter(Frame1, Frame2).
   
-frame_sorter(#video_frame{dts = DTS1}, #video_frame{dts = DTS2}) when DTS1 < DTS2 -> true;
-frame_sorter(#video_frame{dts = DTS, flavor = config}, #video_frame{dts = DTS, flavor = Flavor}) when Flavor =/= config -> true;
-frame_sorter(#video_frame{dts = DTS, flavor = config, content = video}, #video_frame{dts = DTS, flavor = config, content = Content}) when Content=/= video -> true;
-frame_sorter(#video_frame{}, #video_frame{}) -> false.
 
 flush_messages(#flv_file_writer{buffer = Buf1} = FlvWriter, How) ->
   Sorted = lists:sort(fun frame_sorter/2, Buf1),

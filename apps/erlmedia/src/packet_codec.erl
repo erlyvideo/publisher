@@ -155,6 +155,7 @@ decode_headers(Data, Headers, BodyLength) ->
           <<"Contact">> -> {'Contact', HVal};
           <<"Route">> -> {'Route', HVal};
           <<"Event">> -> {'Event', HVal};
+          'Www-Authenticate' -> {'Www-Authenticate', parse_auth_header(HVal)};
           _ -> {HKey, HVal}
         end,
       decode_headers(Rest, [NewPair | Headers], BodyLength);
@@ -264,6 +265,17 @@ binarize_header([Key, Value]) ->
   [Key, <<" ">>, Value, <<"\r\n">>].
 
 
+well_known_auth_key(<<"realm">>) -> realm;
+well_known_auth_key(<<"nonce">>) -> nonce;
+well_known_auth_key(<<"qop">>) -> qop;
+well_known_auth_key(K) -> K.
+
+parse_auth_header(<<"Digest ", Header/binary>>) ->
+  Parts = [begin
+    {match, [K,V]} = re:run(Part, "^\\s?(\\w+)=\\\"(.*)\\\"$", [{capture,all_but_first,binary}]),
+    {well_known_auth_key(K), V}
+  end || Part <- binary:split(Header, <<",">>, [global])],
+  [digest | Parts].
 
 encode_headers(Headers) ->
   iolist_to_binary([binarize_header({K,V}) || {K,V} <- Headers]).
@@ -274,6 +286,9 @@ encode_headers(Headers) ->
 -include_lib("eunit/include/eunit.hrl").
 
 
+parse_auth_header_test() ->
+  ?assertEqual([digest, {realm, <<"Avigilon-12096784">>}, {nonce, <<"7s4tnJDG3b1l4UWY024Sd32228g4sM5sqF8v8795e30000">>}, {qop, <<"auth">>}], 
+    parse_auth_header(<<"Digest realm=\"Avigilon-12096784\", nonce=\"7s4tnJDG3b1l4UWY024Sd32228g4sM5sqF8v8795e30000\", qop=\"auth\"">>)).
 
 parse_tcp_transport_header_test() ->
   ?assertEqual([{proto,tcp},{unicast,true},{mode,'receive'},{interleaved,{2,3}}],

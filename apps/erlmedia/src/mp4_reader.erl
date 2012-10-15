@@ -30,10 +30,11 @@
 -include("../include/aac.hrl").
 -include("../include/media_info.hrl").
 -include("log.hrl").
+-define(TRACK_OFFSET, 255).
 
 
 -export([init/2, media_info/1, read_frame/2, properties/1, seek/3, can_open_file/1, write_frame/2]).
--export([track_for_bitrate/2, track_for_language/2]).
+-export([tracks_for/2]).
 -export([keyframes/1]).
 
 -define(FRAMESIZE, 8).
@@ -96,63 +97,65 @@ properties(#mp4_media{additional = Additional, width = Width, height = Height, d
 
 
 
-media_info(#mp4_media{additional = Additional, duration = Duration, tracks = Tracks} = MP4Media) -> 
+media_info(#mp4_media{additional = Additional, duration = Duration, tracks = Tracks}) -> 
   Streams = lists:map(fun(#mp4_track{content = Content} = Track) ->
     Params = case Content of
-      video -> #video_params{
-        width = Track#mp4_track.width,
-        height = Track#mp4_track.height
-      };
+      video -> 
+        {LengthSize, CfgNALS} = h264:unpack_config(Track#mp4_track.decoder_config),
+        #video_params{
+          length_size = LengthSize,
+          nals = CfgNALS,
+          width = Track#mp4_track.width,
+          height = Track#mp4_track.height
+        };
       audio when Track#mp4_track.codec == aac andalso Track#mp4_track.decoder_config =/= undefined -> 
-        #aac_config{channel_count = Channels, sample_rate = SampleRate} = aac:decode_config(Track#mp4_track.decoder_config),
-        #audio_params{channels = Channels, sample_rate = SampleRate};
+        AudioConfig = #aac_config{channel_count = Channels, sample_rate = SampleRate} = aac:decode_config(Track#mp4_track.decoder_config),
+        #audio_params{channels = Channels, sample_rate = SampleRate, config = AudioConfig};
       audio -> #audio_params{};
       _ -> undefined
     end,
     #stream_info{
       content   = Track#mp4_track.content,
-      stream_id = Track#mp4_track.track_id,
+      track_id  = Track#mp4_track.track_id + ?TRACK_OFFSET,
       codec     = Track#mp4_track.codec,
       config    = Track#mp4_track.decoder_config,
       bitrate   = Track#mp4_track.bitrate,
       language  = Track#mp4_track.language,
       params    = Params
     }
-  end, tuple_to_list(MP4Media#mp4_media.tracks)),
+  end, tuple_to_list(Tracks)),
   
   #media_info{
     flow_type = file,
-    audio = [Stream || #stream_info{content = Content} = Stream <- Streams, Content == audio],
-    video = [Stream || #stream_info{content = Content} = Stream <- Streams, Content == video],
-%    metadata = [Stream || #stream_info{content = Content} = Stream <- Streams, Content == metadata orelse Content == text],
-    duration = Duration,
-%    options  = Additional
-    metadata = Additional 
+    streams   = Streams,
+    duration  = Duration,
+    options   = Additional 
   }.
   
 
-track_for_bitrate(#mp4_media{tracks = Tracks}, Bitrate) ->
-  find_track(Tracks, #mp4_track.bitrate, Bitrate, video).
 
-track_for_language(#mp4_media{tracks = Tracks}, Language) ->
-  find_track(Tracks, #mp4_track.language, Language, audio).
 
-text_with_language(#mp4_media{tracks = Tracks}, Language) ->
-  find_track(Tracks, #mp4_track.language, Language, text).
+find_track(#mp4_media{}, _, false, _) -> [];
+find_track(#mp4_media{tracks = Tracks}, _, all, Content) -> [Id || #mp4_track{content = C, track_id = Id} <- tuple_to_list(Tracks), C == Content];
+find_track(#mp4_media{}, _, Number, _) when is_number(Number) ->  [Number];
+find_track(#mp4_media{}, _, Numbers, _) when is_list(Numbers) ->  Numbers;
+
+find_track(#mp4_media{tracks = Tracks}, Pos, Value, Content) ->
+  find_track(Tracks, Pos, Value, Content);
 
 find_track(Tracks, Pos, Value, Content) ->
-  find_track(Tracks, Pos, Value, 1, Content, undefined).
+  find_track(Tracks, Pos, Value, 1, Content, []).
   
 find_track(Tracks, _Pos, _Value, Index, _Content, Default) when Index > size(Tracks) ->
   Default;
   
 find_track(Tracks, Pos, Value, Index, Content, _Default) when element(Pos,element(Index,Tracks)) == Value andalso (element(Index,Tracks))#mp4_track.content == Content ->
   % ?D({got,Pos,Value,Content,Index}),
-  Index;
+  [Index];
 
 find_track(Tracks, Pos, Value, Index, Content, _Default) when (element(Index,Tracks))#mp4_track.content == Content ->
   % ?D({default,Content,Index}),
-  find_track(Tracks, Pos, Value, Index+1, Content, Index);
+  find_track(Tracks, Pos, Value, Index+1, Content, case _Default of [] -> [Index]; _ -> _Default end);
 
 find_track(Tracks, Pos, Value, Index, Content, Default) ->
   find_track(Tracks, Pos, Value, Index + 1, Content, Default).
@@ -161,28 +164,25 @@ find_track(Tracks, Pos, Value, Index, Content, Default) ->
 first(Media, Options) ->
   first(Media, Options, 0, 0).
 
+
+tracks_for(#mp4_media{} = Media, Options) ->
+  Audio = find_track(Media, #mp4_track.language, proplists:get_value(language, Options), audio),
+  Video = find_track(Media, #mp4_track.bitrate, proplists:get_value(bitrate, Options), video),
+  Subtitle = find_track(Media, #mp4_track.language, proplists:get_value(subtitle, Options), text),
+  Video ++ Audio ++ Subtitle.
+
 first(#mp4_media{} = Media, Options, Id, DTS) when is_number(Id) ->
-  Audio = track_for_language(Media, proplists:get_value(language, Options)),
-  Video = track_for_bitrate(Media, proplists:get_value(bitrate, Options)),
-  Subtitle = text_with_language(Media, proplists:get_value(subtitle, Options)),
-  first(Media, Options, #frame_id{id = Id, a = Audio, v = Video, t = Subtitle}, DTS);
+  first(Media, Options, #frame_id{id = Id, tracks = tracks_for(Media, Options)}, DTS);
 
-first(#mp4_media{tracks = Tracks}, _Options, #frame_id{a = Audio,v = Video} = Id, DTS) ->
-  AudioConfig = case Audio of
-    undefined -> undefined;
-    _ -> (element(Audio,Tracks))#mp4_track.decoder_config
-  end,
-  VideoConfig = case Video of
-    undefined -> undefined;
-    _ -> (element(Video,Tracks))#mp4_track.decoder_config
-  end,
-
-  case {AudioConfig, VideoConfig} of
-    {undefined,undefined} -> Id;
-    {undefined,_} -> {video_config,Id,DTS};
-    {_,_} -> {audio_config,Id,DTS}
-  end.
-
+first(#mp4_media{tracks = Tracks}, _Options, #frame_id{tracks = TrackIds} = Id, DTS) ->
+  
+  Configs = [{Content,TrackId} || #mp4_track{decoder_config = C, content = Content, track_id = TrackId} <- [element(I,Tracks) ||  I <- TrackIds], C =/= undefined],
+  
+  ProperId = lists:foldr(fun({Content,TrackId}, Prev) ->
+    {config,Content,TrackId,DTS, Prev}
+  end, Id, Configs),
+  
+  ProperId.
 
 codec_config({_Type, undefined}, _Media) ->
   undefined;
@@ -219,38 +219,79 @@ codec_config({audio,TrackID}, #mp4_media{tracks = Tracks}) when is_number(TrackI
 read_frame(MediaInfo, undefined) ->
   read_frame(MediaInfo, first(MediaInfo, []));
 
-read_frame(#mp4_media{tracks = Tracks} = Media, {audio_config, #frame_id{a = Audio,v = Video} = Pos, DTS}) ->
-  Frame = codec_config({audio,Audio}, Media),
-  Next = case Video of 
-    undefined -> Pos;
-    _ -> 
-      case (element(Video,Tracks))#mp4_track.decoder_config of
-        undefined -> Pos;
-        _ -> {video_config,Pos, DTS}
-      end
-  end,
-  % ?D({audio,Audio,Frame}),
-  Frame#video_frame{next_id = Next, dts = DTS, pts = DTS};
-
-read_frame(MediaInfo, {video_config, #frame_id{v = Video} = Pos, DTS}) ->
-  Frame = codec_config({video,Video}, MediaInfo),
-  % ?D({video,Video,Frame}),
-  Frame#video_frame{next_id = Pos, dts = DTS, pts = DTS};
+read_frame(#mp4_media{} = Media, {config, Content, TrackId, DTS, Pos}) ->
+  Frame = codec_config({Content,TrackId}, Media),
+  Frame#video_frame{next_id = Pos, dts = DTS, pts = DTS, track_id = TrackId + ?TRACK_OFFSET};
 
 read_frame(_, eof) ->
   eof;
 
 read_frame(#mp4_media{} = Media, Id) ->
   case mp4:read_frame(Media, Id) of
-    eof -> 
+    eof ->
       eof;
-    #mp4_frame{content = text, next_id = Next, body = Data} = Frame ->
-		  VideoFrame = mp4:video_frame(text, Frame, Data),
-		  VideoFrame#video_frame{next_id = Next};
-    #mp4_frame{} = Frame ->
+    #mp4_frame{content = text, next_id = Next, body = Data, track_id = TrackId} = Frame ->
+		  VideoFrame = video_frame(text, Frame, Data),
+		  VideoFrame#video_frame{next_id = Next, track_id = TrackId + ?TRACK_OFFSET};
+    #mp4_frame{offset = Offset, size = Size, content = Content, next_id = Next, track_id = TrackId} = Frame ->
       % ?D({"read frame", Id, Offset, Size,Content}),
-      mp4:video_frame(Media, Frame)
+    	case read_data(Media, Offset, Size) of
+    		{ok, Data, _} ->
+    		  VideoFrame = video_frame(Content, Frame, Data),
+    		  VideoFrame#video_frame{next_id = Next, track_id = TrackId + ?TRACK_OFFSET};
+        eof -> eof;
+        {error, Reason} -> {error, Reason}
+      end
   end.
+  
+
+read_data(#mp4_media{reader = {M, Dev}} = Media, Offset, Size) ->
+  case M:pread(Dev, Offset, Size) of
+    {ok, Data} ->
+      {ok, Data, Media};
+    Else -> Else
+  end.
+  
+
+video_frame(video, #mp4_frame{dts = DTS, keyframe = Keyframe, pts = PTS, codec = Codec}, Data) ->
+  #video_frame{
+   	content = video,
+		dts     = DTS,
+		pts     = PTS,
+		body    = Data,
+		flavor  = case Keyframe of
+		  true ->	keyframe;
+		  _ -> frame
+	  end,
+		codec   = Codec
+  };  
+
+video_frame(text, #mp4_frame{dts = DTS, pts = PTS, codec = Codec}, Data) ->
+  #video_frame{
+   	content = metadata,
+		dts     = DTS,
+		pts     = DTS,
+		flavor  = frame,
+		codec   = Codec,
+		body    = [<<"onTextData">>, {object, [
+		  {name, onCuePoint},
+		  {type, event},
+		  {'begin', DTS},
+  		{'end', PTS},
+		  {text, Data}
+		]}]
+  };  
+
+video_frame(audio, #mp4_frame{dts = DTS, codec = Codec}, Data) ->
+  #video_frame{       
+   	content = audio,
+		dts     = DTS,
+		pts     = DTS,
+  	body    = Data,
+  	flavor  = frame,
+	  codec	  = Codec,
+	  sound	  = {stereo, bit16, rate44}
+  }.
 
 
 
@@ -262,29 +303,18 @@ seek(#mp4_media{duration = Duration}, Timestamp, _Options) when Timestamp > Dura
 
 seek(#mp4_media{} = Media, Timestamp, Options) ->
   % TODO: insert here ability to seek in options
-  Video = track_for_bitrate(Media, proplists:get_value(bitrate, Options)),
-  Audio = track_for_language(Media, proplists:get_value(language, Options)),
-  Subtitle = text_with_language(Media, proplists:get_value(subtitle, Options)),
+  Tracks = tracks_for(Media, Options),
   % ?D({mp4_seek, Timestamp, mp4:seek(Media, Video, Timestamp, proplists:get_value(seek_mode, Options, keyframe))}),
-  case mp4:seek(Media, Audio, Video, Timestamp, proplists:get_value(seek_mode, Options, keyframe)) of
+  case mp4:seek(Media, Tracks, Timestamp, proplists:get_value(seek_mode, Options, keyframe)) of
     undefined -> undefined;
     {Id, DTS} ->
-      FrameId = #frame_id{id = Id,a = Audio,v = Video, t = Subtitle},
-      case codec_config({audio,Audio},Media) of
-        undefined -> 
-          case codec_config({video,Video},Media) of
-            undefined -> {FrameId, DTS};
-            _ -> {{video_config, FrameId, DTS}, DTS}
-          end;
-        _ -> {{audio_config, FrameId, DTS}, DTS}
-      end
+      first(Media, Options, Id, DTS)
   end.
 
 keyframes(#mp4_media{} = Media) ->
   Options = [],
-  Video = track_for_bitrate(Media, proplists:get_value(bitrate, Options)),
-  Audio = track_for_language(Media, proplists:get_value(language, Options)),
-  Keyframes = mp4:keyframes(Media, Audio, Video),
-  [{DTS, #frame_id{id = Id, v = Video, a = Audio}} || {DTS, Id} <- Keyframes].
+  Tracks = tracks_for(Media, Options),
+  Keyframes = mp4:keyframes(Media, Tracks),
+  [{DTS, #frame_id{id = Id, tracks = Tracks}} || {DTS, Id} <- Keyframes].
 
 

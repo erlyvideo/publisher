@@ -48,37 +48,35 @@
 
 -export([read/2, connect/3, options/2, describe/2, setup/3, play/2, teardown/1]).
 
-
 -export([handle_sdp/3, reply/3, reply/4, save_media_info/2, generate_session/0]).
 
 read(URL, Options) when is_binary(URL) ->
   read(binary_to_list(URL), Options);
 
-read(URL, Options) ->
-  try read_raw(URL, Options) of
-    {ok, RTSP, MediaInfo} -> {ok, RTSP, MediaInfo}
-  catch
-    _Class:{error,Reason} -> {error, Reason};
-    exit:Reason -> {error, Reason};
-    Class:Reason -> {Class, Reason}
-  end.
+read(URL, Options) when is_list(URL) ->
+  % try read_raw(URL, Options) of
+  %   {ok, RTSP, MediaInfo} -> {ok, RTSP, MediaInfo}
+  % catch
+  %   _Class:{error,Reason} -> {error, Reason};
+  %   exit:Reason -> {error, Reason};
+  %   Class:Reason -> {Class, Reason}
+  % end.
+  read_raw(URL, Options).
 
 read_raw(URL, Options) ->
-  {ok, RTSP} = rtsp_sup:start_rtsp_socket(undefined),
+  {ok, RTSP} = rtsp_sup:start_rtsp_socket([{consumer, proplists:get_value(consumer, Options, self())}]),
   ConnectResult = rtsp_socket:connect(RTSP, URL, Options),
-  ok == ConnectResult orelse erlang:error(ConnectResult),
-  % {ok, _Methods} = rtsp_socket:options(RTSP, Options),
+  ok == ConnectResult orelse erlang:throw(ConnectResult),
+  {ok, _Methods} = rtsp_socket:options(RTSP, Options),
   {ok, MediaInfo, AvailableTracks} = rtsp_socket:describe(RTSP, Options),
-  {NewMediaInfo,Tracks} = 
+  Tracks = 
     case proplists:get_value(tracks, Options) of
-      undefined -> {MediaInfo,AvailableTracks};
-      RequestedTracks -> 
-	Tracks1 = [T || T <- AvailableTracks, lists:member(T,RequestedTracks)],
-	{rm_tracks_from_mediainfo(MediaInfo,Tracks1),Tracks1}
+      undefined -> AvailableTracks;
+      RequestedTracks -> [T || T <- AvailableTracks, lists:member(T,RequestedTracks)]
   end,
   [ok = rtsp_socket:setup(RTSP, Track, Options) || Track <- Tracks],
   ok = rtsp_socket:play(RTSP, Options),
-  {ok,RTSP,NewMediaInfo}.
+  {ok,RTSP,MediaInfo}.
 
 options(RTSP, Options) ->
   Timeout = proplists:get_value(timeout, Options, 5000)*2,
@@ -103,8 +101,8 @@ connect(RTSP, URL, Options) ->
 teardown(RTSP) ->
   gen_server:call(RTSP, teardown).
 
-start_link(Callback) ->
-  gen_server_ems:start_link(?MODULE, [Callback], []).
+start_link(Options) ->
+  gen_server:start_link(?MODULE, [Options], []).
 
 
 set_socket(Pid, Socket) when is_pid(Pid), is_port(Socket) ->
@@ -112,9 +110,14 @@ set_socket(Pid, Socket) when is_pid(Pid), is_port(Socket) ->
   gen_server:cast(Pid, {socket_ready, Socket}).
 
 
-init([Callback]) ->
-  process_flag(trap_exit, true),
-  {ok, #rtsp_socket{callback = Callback, timeout = ?DEFAULT_TIMEOUT}}.
+init([Options]) ->
+  Callback = proplists:get_value(callback, Options),
+  Consumer = proplists:get_value(consumer, Options),
+  case Consumer of
+    undefined -> ok;
+    _ -> erlang:monitor(process, Consumer)
+  end,
+  {ok, #rtsp_socket{callback = Callback, options = Options, media = Consumer, auth = fun empty_auth/2, timeout = ?DEFAULT_TIMEOUT}}.
 
 
 %%-------------------------------------------------------------------------
@@ -275,20 +278,35 @@ handle_packet(#rtsp_socket{buffer = Data, rtp = RTP, media = Consumer, dump_traf
       handle_packet(Socket1)
   end.
 
+% Special case for server, rejecting Basic auth
+handle_response(#rtsp_socket{state = Request, auth_type = basic, auth_info = AuthInfo, pending = From} = Socket, {response, 401, _Message, Headers, _Body}) ->
+  case proplists:get_value('Www-Authenticate', Headers) of
+    [digest|Digest] ->
+      [Username, Password] = string:tokens(AuthInfo, ":"),
+
+      DigestAuth = fun(ReqName, URL) ->
+        digest_auth(Digest, Username, Password, URL, ReqName)
+      end,
+      {noreply, Socket1, _T} = rtsp_inbound:handle_call({request,Request}, From, Socket#rtsp_socket{auth_type = digest, auth = DigestAuth}),
+      Socket1;
+    _ ->
+      reply_pending(Socket#rtsp_socket{state = undefined, pending_reply = {error, unauthorized}})
+  end;
+
 
 handle_response(#rtsp_socket{state = options} = Socket, {response, _Code, _Message, Headers, _Body}) ->
   Available = string:tokens(binary_to_list(proplists:get_value('Public', Headers, <<"">>)), ", "),
   reply_pending(Socket#rtsp_socket{pending_reply = {ok, Available}});
 
-handle_response(#rtsp_socket{state = describe} = Socket, {response, _Code, _Message, Headers, Body}) ->
+handle_response(#rtsp_socket{state = describe} = Socket, {response, 200, _Message, Headers, Body}) ->
   Socket1 = handle_sdp(Socket, Headers, Body),
   reply_pending(Socket1#rtsp_socket{state = undefined});
 
-handle_response(#rtsp_socket{state = play} = Socket, {response, _Code, _Message, Headers, _Body}) ->
+handle_response(#rtsp_socket{state = play} = Socket, {response, 200, _Message, Headers, _Body}) ->
   Socket1 = rtsp_inbound:sync_rtp(Socket, Headers),
   reply_pending(Socket1#rtsp_socket{state = undefined});
 
-handle_response(#rtsp_socket{state = {setup, StreamId}, rtp = RTP, transport = Transport} = Socket, {response, _Code, _Message, Headers, _Body}) ->
+handle_response(#rtsp_socket{state = {setup, StreamId}, rtp = RTP, transport = Transport} = Socket, {response, 200, _Message, Headers, _Body}) ->
   TransportHeader = proplists:get_value('Transport', Headers, []),
   PortOpts = case proplists:get_value(server_port, TransportHeader) of
     {SPort1,SPort2} -> [{remote_rtp_port,SPort1},{remote_rtcp_port,SPort2}];
@@ -297,9 +315,14 @@ handle_response(#rtsp_socket{state = {setup, StreamId}, rtp = RTP, transport = T
   {ok, RTP1, _} = rtp:setup_channel(RTP, StreamId, [{proto,Transport}]++PortOpts),
   reply_pending(Socket#rtsp_socket{state = undefined, pending_reply = ok, rtp = RTP1});
 
+handle_response(Socket, {response, 401, _Message, _Headers, _Body}) ->
+  reply_pending(Socket#rtsp_socket{state = undefined, pending_reply = {error, unauthorized}});
+
+handle_response(Socket, {response, 404, _Message, _Headers, _Body}) ->
+  reply_pending(Socket#rtsp_socket{state = undefined, pending_reply = {error, not_found}});
 
 handle_response(Socket, {response, _Code, _Message, _Headers, _Body}) ->
-  reply_pending(Socket).
+  reply_pending(Socket#rtsp_socket{state = undefined, pending_reply = {error, _Code}}).
 
 
 reply_pending(#rtsp_socket{pending = undefined} = Socket) ->
@@ -312,32 +335,50 @@ reply_pending(#rtsp_socket{pending = From, pending_reply = Reply} = Socket) ->
   gen_server:reply(From, Reply),
   Socket#rtsp_socket{pending = undefined, pending_reply = ok}.
 
-handle_sdp(#rtsp_socket{} = Socket, Headers, Body) ->
+handle_sdp(#rtsp_socket{media = Consumer, content_base = OldContentBase, url = URL} = Socket, Headers, Body) ->
   <<"application/sdp">> = proplists:get_value('Content-Type', Headers),
-  MediaInfo = sdp:decode(Body),
+  MI1 = #media_info{streams = Streams} = sdp:decode(Body),
+  MI2 = MI1#media_info{streams = [S || #stream_info{content = Content, codec = Codec} = S <- Streams, 
+    (Content == audio orelse Content == video) andalso Codec =/= undefined]},
+  MediaInfo = MI2,
   RTP = rtp:init(local, MediaInfo),
-  save_media_info(Socket#rtsp_socket{rtp = RTP}, MediaInfo).
+  ContentBase = case proplists:get_value('Content-Base', Headers) of
+    undefined -> OldContentBase;
+    NewContentBase -> % Here we must handle important case when Content-Base is given with local network
+      {match, [_Host, BasePath]} = re:run(NewContentBase, "rtsp://([^/]+)(/.*)$", [{capture,all_but_first,list}]),
+      {match, [Host, _Path]} = re:run(URL, "rtsp://([^/]+)(/.*)$", [{capture,all_but_first,list}]),
+      "rtsp://" ++ Host ++ "/" ++ BasePath
+  end,
+  Socket1 = save_media_info(Socket#rtsp_socket{rtp = RTP, content_base = ContentBase}, MediaInfo),
+  case Consumer of
+    undefined -> ok;
+    _ -> Consumer ! Socket1#rtsp_socket.media_info
+  end,
+  Socket1.
+  
 
-save_media_info(#rtsp_socket{} = Socket, #media_info{audio = Audio, video = Video} = MediaInfo) ->
-  StreamNums = lists:seq(1, length(Audio)+length(Video)),
+save_media_info(#rtsp_socket{options = Options} = Socket, #media_info{streams = Streams1} = MediaInfo) ->
+  StreamNums = lists:seq(1, length(Streams1)),
 
-  Streams = lists:sort(fun(#stream_info{stream_id = Id1}, #stream_info{stream_id = Id2}) ->
+  Streams2 = lists:sort(fun(#stream_info{track_id = Id1}, #stream_info{track_id = Id2}) ->
     Id1 =< Id2
-  end, Audio ++ Video),
+  end, Streams1),
+  
+  Streams3 = [lists:nth(Track, Streams2) || Track <- proplists:get_value(tracks, Options, lists:seq(1,length(Streams2)))],  
+  
+  Streams = Streams3,
 
-  StreamInfos = list_to_tuple(Streams),
-  ControlMap = [{proplists:get_value(control, Opt),S} || #stream_info{options = Opt, stream_id = S} <- Streams],
+  StreamInfos = list_to_tuple(Streams3),
+  ControlMap = [{proplists:get_value(control, Opt),S} || #stream_info{options = Opt, track_id = S} <- Streams],
+  MediaInfo1 = MediaInfo#media_info{streams = Streams},
 
   % ?D({"Streams", StreamInfos, StreamNums, ControlMap}),
-  Socket#rtsp_socket{rtp_streams = StreamInfos, media_info = MediaInfo, control_map = ControlMap, pending_reply = {ok, MediaInfo, StreamNums}}.
+  Socket#rtsp_socket{rtp_streams = StreamInfos, media_info = MediaInfo1, control_map = ControlMap, pending_reply = {ok, MediaInfo1, StreamNums}}.
 
 
 generate_session() ->
   {_A1, A2, A3} = now(),
   lists:flatten(io_lib:format("~p~p", [A2*1000,A3 div 1000])).
-
-
-
 
 seq(Headers) ->
   proplists:get_value('Cseq', Headers, 1).
@@ -401,7 +442,10 @@ handle_request({request, 'OPTIONS', _URL, Headers, _Body}, State) ->
 handle_request({request, 'ANNOUNCE', URL, Headers, Body}, Socket) ->
   rtsp_inbound:handle_announce_request(Socket, URL, Headers, Body);
 
-handle_request({request, 'PAUSE', _URL, Headers, _Body}, #rtsp_socket{} = State) ->
+handle_request({request, 'PAUSE', _URL, Headers, _Body}, #rtsp_socket{direction = in} = State) ->
+  rtsp_inbound:handle_pause(State, _URL, Headers, _Body);
+
+handle_request({request, 'PAUSE', _URL, Headers, _Body}, #rtsp_socket{direction = out} = State) ->
   rtsp_outbound:handle_pause_request(State, _URL, Headers, _Body);
 %
 % handle_request({request, 'PAUSE', _URL, Headers, _Body}, #rtsp_socket{rtp = Consumer} = State) ->
@@ -441,34 +485,6 @@ reply(#rtsp_socket{socket = Socket} = State, Code, Headers, Body) ->
   gen_tcp:send(Socket, Reply),
   State1.
 
-rm_tracks_from_mediainfo(#media_info{audio=A,video=V}=MediaInfo,Tracks) ->
-  NewV = rm_tracks_from_mediainfo(V,Tracks),
-  NewA = rm_tracks_from_mediainfo(A,Tracks),
-  MediaInfo#media_info{audio=NewA,video=NewV};
-
-rm_tracks_from_mediainfo(Elements,Tracks) ->
-  lists:foldl(
-    fun(Element,Acc) ->
-	NewElement=
-	  lists:foldl(
-	    fun(T,Acc1) -> 
-		CurTrack = "track"++erlang:integer_to_list(T),
-		case proplists:get_value(control,Element#stream_info.options) of
-		  CurTrack->
-		    [Element|Acc1];
-		  _->
-		    Acc1
-		end
-	    end,[],Tracks),
-	case NewElement of
-	  [] ->
-	    Acc;
-	  [Else] ->
-	    [Else|Acc]
-	end
-    end,[],Elements).
-
-
 
 
 extract_session(Socket, Headers) ->
@@ -476,8 +492,7 @@ extract_session(Socket, Headers) ->
     undefined ->
       Socket;
     FullSession ->
-      % ?D({"Session", FullSession}),
-      Socket#rtsp_socket{session = hd(string:tokens(binary_to_list(FullSession), ";"))}
+      Socket#rtsp_socket{session = "Session: "++hd(string:tokens(binary_to_list(FullSession), ";"))++"\r\n"}
   end.
 
 parse_session(Session) when is_binary(Session) -> parse_session(binary_to_list(Session));
@@ -496,11 +511,11 @@ append_session(#rtsp_socket{session = Session, timeout = Timeout} = Socket, Head
 
 
 send_teardown(#rtsp_socket{socket = undefined}) ->
-  ?D({warning, teardown,"on closed socket"}),
+  % ?D({warning, teardown,"on closed socket"}),
   ok;
 
 send_teardown(#rtsp_socket{socket = Socket, url = URL, auth = Auth, seq = Seq} = RTSP) ->
-  Call = io_lib:format("TEARDOWN ~s RTSP/1.0\r\nCSeq: ~p\r\nAccept: application/sdp\r\n"++Auth++"\r\n", [URL, Seq+1]),
+  Call = io_lib:format("TEARDOWN ~s RTSP/1.0\r\nCSeq: ~p\r\nAccept: application/sdp\r\n"++Auth("TEARDOWN", URL)++"\r\n", [URL, Seq+1]),
   gen_tcp:send(Socket, Call),
   rtsp_inbound:dump_io(RTSP, Call),
   gen_tcp:close(Socket).
@@ -527,4 +542,49 @@ terminate(_Reason, RTSP) ->
 code_change(_OldVsn, State, _Extra) ->
   {ok, State}.
 
+
+
+to_hex(L) when is_binary(L) ->
+  to_hex(binary_to_list(L));
+
+to_hex(L) when is_list(L) -> 
+  list_to_binary(lists:flatten(lists:map(fun(X) -> int_to_hex(X) end, L))).
+
+int_to_hex(N) when N < 256 ->
+  [hex(N div 16), hex(N rem 16)].
+
+hex(N) when N < 10 ->
+  $0+N;
+hex(N) when N >= 10, N < 16 ->
+  $a + (N-10).
+
+empty_auth(_Method, _URL) ->
+  "".
+
+
+digest_auth(Digest, Username, Password, URL, Request) ->
+  Realm = proplists:get_value(realm, Digest),
+  Nonce = proplists:get_value(nonce, Digest),
+  % CNonce = to_hex(crypto:md5(iolist_to_binary([Username, ":erlyvideo:", Password]))),
+  % CNonce = <<>>,
+  % NonceCount = <<"00000000">>,
+  _Qop = proplists:get_value(qop, Digest),
+
+  % <<"auth">> == Qop orelse erlang:throw({unsupported_digest_auth, Qop}),
+  HA1 = to_hex(crypto:md5(iolist_to_binary([Username, ":", Realm, ":", Password]))),
+  HA2 = to_hex(crypto:md5(iolist_to_binary([Request, ":", URL]))),
+  Response = to_hex(crypto:md5(iolist_to_binary([HA1, ":", Nonce, ":", HA2]))),
+
+
+  DigestAuth = io_lib:format("Authorization: Digest username=\"~s\", realm=\"~s\", nonce=\"~s\", uri=\"~s\", response=\"~s\"\r\n",
+  [Username, Realm, Nonce, URL, Response]),
+  lists:flatten(DigestAuth).
+
+
+
+-include_lib("eunit/include/eunit.hrl").
+
+digest_auth_test() ->
+  ?assertEqual("Authorization: Digest username=\"admin\", realm=\"Avigilon-12045784\", nonce=\"dh9U5wffmjzbGZguCeXukieLz277ckKgelszUk86230000\", uri=\"rtsp://admin:admin@94.80.16.122:554/defaultPrimary0?streamType=u\", response=\"99a9e6b080a96e25547b9425ff5d68bf\"\r\n",
+  digest_auth([{realm, <<"Avigilon-12045784">>}, {nonce, <<"dh9U5wffmjzbGZguCeXukieLz277ckKgelszUk86230000">>}, {qop, <<"auth">>}], "admin", "admin", "rtsp://admin:admin@94.80.16.122:554/defaultPrimary0?streamType=u", "OPTIONS")).
 

@@ -44,8 +44,8 @@
 
 -export([read_frame/1, read_frame/2, duration/1]).
 
--export([content_offset/1]).
--export([frame_sorter/2]).
+-export([content_offset/1, append_dts/2]).
+-export([frame_sorter/2, decode_list/1]).
 
 content_offset(h264) -> ?FLV_TAG_HEADER_LENGTH + 5;
 content_offset(aac) -> ?FLV_TAG_HEADER_LENGTH + 2;
@@ -183,6 +183,25 @@ data_offset() -> ?FLV_HEADER_LENGTH + ?FLV_PREV_TAG_SIZE_LENGTH.
 
 
 
+%% @spec(Data::binary(), DTS::number()) -> Shifted::binary()
+%% @doc adds proper dts to all frames in file
+append_dts(Data, undefined) ->
+  Data;
+append_dts(Data, DTS) ->
+  append_dts(Data, round(DTS), []).
+
+append_dts(<<>>, _DTS, Acc) ->
+  iolist_to_binary(lists:reverse(Acc));
+
+append_dts(<<Type, Size:24, _TS:32, _StreamId:24, _Tag:Size/binary, _PrevSize:32, Data/binary>>, DTS, Acc) when Type =/= 9 andalso Type =/= 8 ->
+  append_dts(Data, DTS, Acc);
+
+append_dts(<<Type, Size:24, TS1:24, TS2, StreamId:24, Tag:Size/binary, PrevSize:32, Data/binary>>, DTS, Acc) ->
+  <<TS:32>> = <<TS2, TS1:24>>,
+  <<TS3, TS4:24>> = <<(DTS+TS):32>>,
+  append_dts(Data, DTS, [[<<Type, Size:24, TS4:24, TS3, StreamId:24>>, Tag, <<PrevSize:32>>]|Acc]).
+
+
 duration(Reader) ->
   {_Header, DataOffset} = read_header(Reader),
   duration(Reader, DataOffset, 0).
@@ -213,9 +232,10 @@ read_header(Device) ->
 
 
 
-tag_header(<<Type, Size:24, TimeStamp:24, TimeStampExt, StreamId:24>>) ->
+tag_header(<<0:2, Enc:1, Type:5, Size:24, TimeStamp:24, TimeStampExt, StreamId:24>>) ->
+  Encrypted = Enc == 1,
   <<TimeStampAbs:32>> = <<TimeStampExt, TimeStamp:24>>,
-  #flv_tag{type = frame_format(Type), timestamp = TimeStampAbs, size = Size, stream_id = StreamId}.
+  #flv_tag{encrypted = Encrypted, type = frame_format(Type), timestamp = TimeStampAbs, size = Size, stream_id = StreamId}.
 
 %%--------------------------------------------------------------------
 %% @spec (Body::binary()) -> Config::aac_config()
@@ -250,7 +270,7 @@ read_tag(<<Header:?FLV_TAG_HEADER_LENGTH/binary, Data/binary>>) ->
     #flv_tag{type = audio, size = 0} = Tag ->
       Tag#flv_tag{body = #flv_audio_tag{codec = empty, body = <<>>, flavor = frame}, flavor = frame};
 
-    #flv_tag{type = Type, size = Size} = Tag when size(Data) >= Size ->
+    #flv_tag{type = Type, size = Size, encrypted = _Encrypted} = Tag when size(Data) >= Size ->
       {Body, Rest} = erlang:split_binary(Data, Size),
 
       Flavor = case Type of
@@ -261,6 +281,13 @@ read_tag(<<Header:?FLV_TAG_HEADER_LENGTH/binary, Data/binary>>) ->
           end;
         _ -> frame
       end,
+      % ?D({e,Encrypted}),
+      % case Encrypted of
+      %   true ->
+      %     <<Skip:6, Data/binary>> = Body,
+      %     ?D(Body);
+      %   false -> ok
+      % end,
 
       {ok, decode_tag(Tag#flv_tag{body = Body, flavor = Flavor}), Rest};
 
@@ -283,7 +310,7 @@ read_tag({Module,Device} = Reader, Offset) ->
       {ok, <<PrevTagSize:32>>} = Module:pread(Device, Offset + ?FLV_TAG_HEADER_LENGTH + Size, 4),
 	    case ?FLV_TAG_HEADER_LENGTH + Size of
 	      PrevTagSize -> ok;
-	      _ -> ?D({broken_flv, Offset, Size, PrevTagSize, ?FLV_TAG_HEADER_LENGTH + Size, Module:pread(Device, Offset - 100, Size + 200)}), erlang:error({broken_flv,Offset})
+	      _ -> ?D({broken_flv, Offset, Size, PrevTagSize, ?FLV_TAG_HEADER_LENGTH + Size, Module:pread(Device, lists:max([0,Offset - 40]), Size + 40)}), erlang:error({broken_flv,Offset})
 	    end,
       % ?D({flv, Offset, Size, Tag#flv_tag.next_tag_offset}),
       PrevTagSize = ?FLV_TAG_HEADER_LENGTH + Size,

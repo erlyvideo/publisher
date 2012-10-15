@@ -94,7 +94,7 @@ has_config(_) -> false.
 decoder_config(#h264{sps = undefined}) -> undefined;
 decoder_config(#h264{pps = undefined}) -> undefined;
 decoder_config(#h264{pps = PPS, sps = SPS, profile_compat = ProfileCompat}) ->
-  LengthSize = 4-1,
+  LengthSize = 4-1, %% YES. it is hardcoded to 4 bytes
   Version = 1,
   [<<_:8, Profile, _:8, Level, _/binary>>|_] = SPS,
   SPSBin = iolist_to_binary(SPS),
@@ -150,10 +150,13 @@ decode_nal(<<0:1, _NalRefIdc:2, ?NAL_SLICE_C:5, _Rest/binary>> = _Data, H264) ->
   % slice_header(Rest, H264);
   {H264, []};
 
-decode_nal(<<0:1, _NalRefIdc:2, ?NAL_IDR:5, _/binary>> = Data, #h264{} = H264) ->
+decode_nal(<<0:1, _NalRefIdc:2, ?NAL_IDR:5, _/binary>> = Data, #h264{sps = SPS, pps = PPS} = H264) ->
+  SPS =/= undefined orelse erlang:error(no_sps),
+  PPS =/= undefined orelse erlang:error(no_pps),
+  
   VideoFrame = #video_frame{
    	content = video,
-		body    = nal_with_size(Data),
+		body    = iolist_to_binary([[nal_with_size(S) || S <- SPS], [nal_with_size(P) || P <- PPS], nal_with_size(Data)]),
 		flavor  = keyframe,
 		codec   = h264,
 		sound   = slice_header(Data)
@@ -176,6 +179,7 @@ decode_nal(<<0:1, _NalRefIdc:2, ?NAL_SPS:5, Profile, _:8, Level, _/binary>> = SP
   % ?D({"Parsing SPS", SPS}),
   % _SPSInfo = parse_sps(SPS),
   % ?D({"SPS", profile_name(Profile), Level/10, _SPSInfo#h264_sps.width, _SPSInfo#h264_sps.height}),
+  ?D({sps,Profile,Level}),
   {H264#h264{profile = Profile, level = Level, sps = [SPS]}, []};
 
 decode_nal(<<0:1, _NalRefIdc:2, ?NAL_PPS:5, Bin/binary>> = PPS, #h264{} = H264) ->

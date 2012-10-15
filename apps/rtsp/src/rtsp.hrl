@@ -14,7 +14,10 @@
   addr,
   port,
   url,
+  content_base,
+  auth_type = basic,
   auth = "",
+  auth_info,
   socket,
   options,
   rtp_streams = {},
@@ -27,10 +30,9 @@
   pending_reply = ok,
   seq = 0,
   timeout = ?DEFAULT_TIMEOUT,
-  session,
+  session = "",
   rtp_udp,
   dump_traffic = true,
   sent_sdp_config = false,
-  
   rtp           :: pid()
 }).

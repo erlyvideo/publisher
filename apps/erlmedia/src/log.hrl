@@ -1,1 +1,1 @@
--define(D(X), io:format("~p:~p ~240p~n", [?MODULE, ?LINE, X])).
+-define(D(X), lager:info("~p:~p ~240p~n", [?MODULE, ?LINE, X])).

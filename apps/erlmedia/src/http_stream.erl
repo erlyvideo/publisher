@@ -24,25 +24,29 @@
 -author('Max Lapshin <max@maxidoors.ru>').
 -include("log.hrl").
 
--export([get/2, get_with_body/2, head/2]).
+-define(MAX_REDIRECTS,5).
 
+-export([request/2, request_body/2, head/2]).
+-export([do/1]).
 open_socket(URL, Options) ->
-  MaxRedirects = proplists:get_value(max_redirects, Options, 5),
+  MaxRedirects = proplists:get_value(max_redirects, Options, ?MAX_REDIRECTS),
   make_request_with_redirect(URL, Options, MaxRedirects).
     
 make_request_with_redirect(_URL, _Options, 0) ->
   {error, too_many_redirects};
 
 make_request_with_redirect(URL, Options, RedirectsLeft) ->
+  NoRedirect = proplists:get_value(noredirect, Options,false),
   case make_raw_request(URL, Options) of
     {http, Socket, Code} when Code >= 200 andalso Code < 300 ->
-      {ok, [{redirected_url, URL}], Socket};
+      {ok, Code, [{redirected_url, URL}], Socket};
+    {http, Socket, Code} when (Code >= 301 orelse Code == 302) andalso NoRedirect  == true ->
+      {ok, Code, [], Socket};
     {http, Socket, Code} when Code == 301 orelse Code == 302 ->
       Timeout = proplists:get_value(timeout, Options, 3000),
       case wait_for_headers(Socket, [], Timeout) of
         {ok, Headers} ->
-%          gen_tcp:close(Socket),
-          Location = proplists:get_value('Location', Headers),
+	        Location = proplists:get_value('Location', Headers),
           NewURL = calculate_redirected_url(URL, Location),
           make_request_with_redirect(NewURL, Options, RedirectsLeft - 1);
         {error, Reason} ->
@@ -52,7 +56,6 @@ make_request_with_redirect(URL, Options, RedirectsLeft) ->
       {error, {http_code, Code}};
     {tcp_closed, _Socket} ->
       make_request_with_redirect(URL, lists:keydelete(socket, 1, Options), RedirectsLeft);
-      % {error, tcp_closed};
     {error, Reason} ->
       {error, Reason}
   end.
@@ -67,56 +70,90 @@ calculate_redirected_url(URL, Location) ->
   end.  
 
 make_raw_request(URL, Options) ->
-  Timeout = proplists:get_value(timeout, Options, 3000),
-  Method = case proplists:get_value(method, Options, get) of
-    Meth when is_atom(Meth) -> string:to_upper(erlang:atom_to_list(Meth))
-  end,
-
   {_, _, Host, Port, _Path, _Query} = http_uri2:parse(URL),
   {_HostPort, Path} = http_uri2:extract_path_with_query(URL),
-  
+
   RequestPath = case proplists:get_value(send_hostpath, Options, false) of
     true -> URL;
     false -> Path
   end,
+  PortSpec = 
+    case Port of
+      80 -> "";
+      _ -> ":"++integer_to_list(Port)
+    end,
 
-  Socket = case proplists:get_value(socket, Options) of
+  case find_or_open_socket(Host, Port, Options) of
+    {error,Reason} ->
+      {error,Reason};
+    {ok,NewSock} ->
+      case make_request(Host, [{request_path, RequestPath},{port_spec,PortSpec} | Options]) of
+	{ok, Request} ->
+	  send_request(NewSock, Request,Options);
+	{error,Reason} ->
+	  {error, Reason}
+      end
+  end.
+
+find_or_open_socket(Host,Port,Options) ->
+  Timeout = proplists:get_value(timeout, Options, 3000), 
+  case proplists:get_value(socket, Options) of
     undefined ->
-      {ok, NewSock} = gen_tcp:connect(Host, Port, [binary, {packet, http_bin}, {active, false}, {recbuf, 65536}, inet], Timeout),
-      NewSock;
+      gen_tcp:connect(Host, Port, [binary, {packet, http_bin}, {active, false}, {recbuf, 65536}, inet, {reuseaddr,true}], Timeout);
     OldSocket ->
-      inet:setopts(OldSocket, [{packet,http_bin},{active,false}]),
-      OldSocket
-  end,
-  
-  Body = proplists:get_value(body, Options, ""),
-  
-  Headers = proplists:get_value(headers, Options, []) ++ 
-  case proplists:get_value(range, Options) of
-    {Start,End} -> [{"Range", lists:flatten(io_lib:format("bytes=~p-~p", [Start,End-1]))}];
-    undefined -> []
-  end ++
-  case proplists:get_value(body, Options) of
-    undefined -> 
-      case proplists:get_value(method, Options) of
-        post -> [{"Content-Length", "0"}];
-        _ -> []
+      case inet:setopts(OldSocket, [{packet,http_bin},{active,false}]) of
+        ok ->
+          {ok, OldSocket};
+        {error, _} ->
+          (catch gen_tcp:close(OldSocket)),
+          gen_tcp:connect(Host, Port, [binary, {packet, http_bin}, {active, false}, {recbuf, 65536}, inet, {reuseaddr,true}], Timeout)
+      end
+  end.
+
+make_request(Host,Options) ->
+  Method = 
+    case proplists:get_value(method, Options, get) of
+      Meth when is_atom(Meth) -> string:to_upper(erlang:atom_to_list(Meth))
+    end,
+  PortSpec = proplists:get_value(port_spec, Options),
+  RequestPath = proplists:get_value(request_path, Options,""),
+  {StartAcc, Body} = 
+    case proplists:get_value(body, Options) of 
+      undefined when Method == "POST" ->
+	{[{"Content-Length", "0"}], []};
+      undefined ->
+	{[], []};
+      RawBody ->
+	{[{"Content-Length", integer_to_list(iolist_size(RawBody))}], RawBody}
+    end,
+  Headers = 
+    lists:foldl(
+      fun
+	({range,{Start,End}}, Acc) ->
+	  [{"Range",lists:flatten(io_lib:format("bytes=~p-~p",[Start,End-1]))} | Acc];
+	({basic_auth, {Login, Password}}, Acc) ->
+	  [{"Authorization", "Basic " ++ base64:encode_to_string(lists:flatten(io_lib:format("~s:~s", [Login, Password])))} | Acc];
+	(_, Acc)->
+	  Acc
+      end, proplists:get_value(headers, Options, []) ++ StartAcc, Options
+     ),
+  {ok,iolist_to_binary([Method, " ", RequestPath, " HTTP/1.1\r\nHost: ", Host, PortSpec, "\r\n", [io_lib:format("~s: ~s\r\n", [Key, Value]) || {Key,Value} <- Headers], "\r\n", Body])}.
+
+send_request(Socket, Request,Options) ->
+  Timeout = proplists:get_value(timeout, Options, 3000),
+  case gen_tcp:send(Socket, Request) of
+    ok ->
+      case inet:setopts(Socket, [{active, once}]) of
+	ok ->
+	  receive_response(Socket,Timeout);
+	SetoptsError ->
+	  SetoptsError
       end;
-    Body -> [{"Content-Length", integer_to_list(iolist_size(Body))}]
-  end ++ case proplists:get_value(basic_auth, Options) of
-    undefined -> [];
-    {Login,Password} -> [{"Authorization", "Basic "++base64:encode_to_string(lists:flatten(io_lib:format("~s:~s", [Login, Password])))}]
-  end,
-  PortSpec = case Port of
-    80 -> "";
-    _ -> ":"++integer_to_list(Port)
-  end,
-  Request = iolist_to_binary([Method, " ", RequestPath, " HTTP/1.1\r\nHost: ", Host, PortSpec, "\r\n",
-  [io_lib:format("~s: ~s\r\n", [Key, Value]) || {Key,Value} <- Headers], "\r\n", Body]),
-  % ?D({http_connect, Request}),
-  
-  ok = gen_tcp:send(Socket, Request),
-  ok = inet:setopts(Socket, [{active, once}]),
+    SendError ->
+      SendError
+  end.
+
+receive_response(Socket,Timeout) ->
   receive
     {http, Socket, {http_response, _Version, Code, _Reply}} ->
       {http, Socket, Code};
@@ -130,90 +167,105 @@ make_raw_request(URL, Options) ->
       {error, timeout}
   end.
 
+request(URL,Options) when is_binary(URL) ->
+  request(binary_to_list(URL),Options);
 
-get_with_body(URL, Options) ->
-  case get(URL, Options) of
-    {ok, Headers, Socket} ->
+request(URL, Options) ->
+  Timeout = proplists:get_value(timeout, Options, 3000),
+  case open_socket(URL, Options) of
+    {ok, Code, Headers1, Socket} ->
+      case wait_for_headers(Socket, [], Timeout) of
+        {ok, Headers} ->
+          ok = inet:setopts(Socket, [{active, false},{packet,raw}]),
+    	    {ok, {Socket, Code, Headers ++ Headers1}};
+	      {error, Reason} ->
+	        (gen_tcp:close(Socket)),
+	        {error, Reason}
+      end;
+    {error, Reason} -> {error, Reason}
+  end.
+
+request_body(URL, Options) ->
+  case request(URL, [{body_request,true}|Options]) of
+    {ok, {Socket, Code, Headers}} ->
       case proplists:get_value('Content-Length', Headers) of
         undefined ->
           case proplists:get_value('Transfer-Encoding', Headers) of
             <<"chunked">> ->
-              Body = get_chunked_body(Socket),
-              {ok, Headers, Body};
+	      handle_response(fun() -> get_chunked_body(Socket) end,Socket,Code,Headers,Options);
             _ ->
               case proplists:get_value('Connection', Headers) of
                 <<"close">> ->
-                  Body = get_plain_body(Socket),
-                  {ok, Headers, Body};
+                  handle_response(fun() -> gen_tcp:recv(Socket,0) end,Socket,Code,Headers,Options);
                 _ ->
                   gen_tcp:close(Socket),
                   {error, no_length}
               end
           end;
         Length ->
-          {ok, Body} = gen_tcp:recv(Socket, to_i(Length)),
- %         gen_tcp:close(Socket),
-          {ok, Socket, Headers, Body}
+	  handle_response(fun() -> gen_tcp:recv(Socket, to_i(Length)) end,Socket,Code,Headers,Options)
       end;
     Else ->
       Else
   end.  
+
+handle_response(F, Socket, Code, Headers,Options) ->
+  case F() of
+    {ok, Body} ->
+      case proplists:get_value(keepalive, Options, true) of
+	      true -> ok;
+	      false -> gen_tcp:close(Socket)
+      end,
+      {ok, {Socket, Code, Headers, Body}};
+    Error ->
+      Error
+  end.
 
 to_i(L) when is_list(L) -> list_to_integer(L);
 to_i(B) when is_binary(B) -> to_i(binary_to_list(B));
 to_i(I) when is_number(I) -> I.
   
 
-get_plain_body(Socket) ->
-  get_plain_body(Socket, []).
-
-get_plain_body(Socket, Acc) ->
-  case gen_tcp:recv(Socket, 0) of
-    {ok, Bin} -> get_plain_body(Socket, [Bin|Acc]);
-    {error, closed} -> iolist_to_binary(lists:reverse(Acc))
-  end.
-
 get_chunked_body(Socket) ->
   get_chunked_body(Socket, []).
 
 get_chunked_body(Socket, Acc) ->
-  inet:setopts(Socket, [{packet,line}]),
-  {ok, ChunkHeader} = gen_tcp:recv(Socket, 0),
-  inet:setopts(Socket, [{packet,raw}]),
+  ok = inet:setopts(Socket, [{packet,line}]),
+  case gen_tcp:recv(Socket, 0) of
+    {ok,ChunkHeader} ->
+      ok = inet:setopts(Socket, [{packet,raw}]), 
+      ChunkSize = parse_size_chunk(ChunkHeader),   
+      case get_next_chunk(Socket, ChunkSize) of
+	end_of_body ->
+	  {ok,iolist_to_binary(lists:reverse(Acc))};	
+	{ok, Data} ->
+	  get_chunked_body(Socket,[Data|Acc]);
+	NextChunkError ->
+	  NextChunkError
+      end;
+    RecvError ->
+      RecvError
+  end. 
+
+parse_size_chunk(ChunkHeader) ->
   case re:run(ChunkHeader, "^([\\d\\w]+)", [{capture,all_but_first, list}]) of
-    {match, [C]} ->
-      get_next_chunk(Socket, Acc, list_to_integer(C, 16));
+    {match, [Count]} ->
+      list_to_integer(Count, 16);
     nomatch ->
-      get_next_chunk(Socket, Acc, 0)  
+      0 
   end.
 
-get_next_chunk(_Socket, Acc, 0) ->
-  iolist_to_binary(lists:reverse(Acc));
+get_next_chunk(_Socket, 0) ->
+  end_of_body;
 
-get_next_chunk(Socket, Acc, Length) ->
-  {ok, Body} = gen_tcp:recv(Socket, Length),
-  get_chunked_body(Socket, [Body|Acc]).
+get_next_chunk(Socket, Length) ->
+  gen_tcp:recv(Socket, Length).
 
 head(URL, Options) ->
-  {ok, Headers, _Socket} = get(URL, [{method,head}|Options]),
-%  gen_tcp:close(_Socket),
-  {ok, Headers}.
-
-get(URL, Options) ->
-  Timeout = proplists:get_value(timeout, Options, 3000),
-  case open_socket(URL, Options) of
-    {ok, Headers1, Socket} ->
-      case wait_for_headers(Socket, [], Timeout) of
-        {ok, Headers} ->
-          ok = inet:setopts(Socket, [{active, false},{packet,raw},{keepalive,true}]),
-          {ok, Headers ++ Headers1, Socket};
-        {error, Reason} -> {error, Reason}
-      end;
-    {error, Reason} -> {error, Reason}
-  end.
+  request(URL, [{method,head}|Options]).
   
 wait_for_headers(Socket, Headers, Timeout) ->
-  ok=inet:setopts(Socket, [{active,once}]),
+  ok = inet:setopts(Socket, [{active,once}]),
   receive
     {http, Socket, {http_header, _, Header, _, Value}} ->
       wait_for_headers(Socket, [{Header, Value}|Headers], Timeout);
@@ -230,21 +282,88 @@ wait_for_headers(Socket, Headers, Timeout) ->
   end.
 
 
+
+
 %%
 %% Tests
 %%
 -include_lib("eunit/include/eunit.hrl").
+-include_lib("inets/include/httpd.hrl").
+
+do(Mod) ->
+  case handle_test_req(Mod) of
+    false ->
+      {proceed, Mod#mod.data};
+    Else ->
+      Else
+  end.
+
+handle_test_req(#mod{absolute_uri="127.0.0.1:9090/redirect"}) ->
+  ?D("Test redirect"),
+  {proceed, [{response,{response,[{code,301},{location,"http://127.0.0.1:9090/123.txt"}],nobody}}]};
+
+handle_test_req(#mod{absolute_uri="127.0.0.1:9090/chunk"}) ->
+  ?D("Chunked response"),
+  Body = "25\nThis is the data in the first chunk\r\n3\nsec\r\n0",
+  {proceed, [{response,{response,[{code,200},{transfer_encoding,"chunked"}],Body}}]};
+
+handle_test_req(_Mod) ->
+  false.
+
 
 
 calculate_redirected_url_test() ->
   ?assertEqual(<<"http://ya.ru/145">>, calculate_redirected_url("http://ya.ru/", "/145")),
   ?assertEqual(<<"http://ya.ru/145">>, calculate_redirected_url("http://ya.ru/", "http://ya.ru/145")),
   ?assertEqual(<<"http://yahoo.com/145">>, calculate_redirected_url("http://ya.ru/", "http://yahoo.com/145")).
-  
 
 
-
-
-
-
-  
+request_body_test_ () ->
+  {setup, 
+   fun() ->
+       inets:start(),
+       inets:start(httpd,[{server_root,"test/wwwroot"},{port,9090},{server_name,"test_server"},{document_root,"test/files"},{modules,[mod_alias,mod_range, http_stream, mod_auth, mod_esi, mod_actions, mod_cgi, mod_dir, mod_get, mod_head, mod_log, mod_disk_log]}])
+   end, 
+   fun({ok,Pid}) ->
+       inets:stop(httpd,Pid),
+       inets:stop()
+   end,
+   fun() ->
+%%%  Simple body request test
+       ?assertMatch({ok,{_Socket,200,_Headers,<<"123\n">>}},http_stream:request_body("http://127.0.0.1:9090/123.txt",[])),
+%%% Case when connection is enstablished
+       ?assertEqual({error,econnrefused},http_stream:request_body("http://127.0.0.1:9091/",[])),
+%%% Case when page not found 
+       ?assertEqual({error,{http_code,404}},http_stream:request_body("http://127.0.0.1:9090/wrong.file",[])),
+%%% Range request test
+       ?assertMatch({ok,{_Socket,206,_Headers,<<"1">>}},http_stream:request_body("http://127.0.0.1:9090/123.txt",[{range,{0,1}}])),
+%%% Range out test 
+       ?assertEqual({error,{http_code,416}}, http_stream:request_body("http://127.0.0.1:9090/123.txt",[{range,{5,10}}])),
+%%% Redirect test
+       ?assertMatch({ok,{_Socket,200,
+			 [{'Server',_ServerName},
+			  {'Date',_Date},
+			  {'Content-Type',<<"text/plain">>},
+			  {'Etag',_ETag},
+			  {'Content-Length',<<"4">>},
+			  {'Last-Modified',_LastMod},
+			  {redirected_url,<<"http://127.0.0.1:9090/123.txt">>}]}},
+		    http_stream:request("http://127.0.0.1:9090/redirect",[])),
+%%% Noredirect option test
+       ?assertMatch({ok,{_Socket,301,
+			 [{'Server', _ServerName},
+			  {'Content-Type',<<"text/html">>},
+			  {'Date', _Date},
+			  {'Location',<<"http://127.0.0.1:9090/123.txt">>}]}},
+		    http_stream:request("http://127.0.0.1:9090/redirect",[{noredirect, true}])),
+%%% Chunked body test
+       ?assertMatch({ok,{_Socket, 200,
+			 [{'Server', _ServerName},
+			  {'Content-Type',<<"text/html">>},
+			  {'Date', _Date},
+			  {'Transfer-Encoding',<<"chunked">>},
+			  {redirected_url,"http://127.0.0.1:9090/chunk"}],
+			 <<"This is the data in the first chunk\r\nsec">>}},
+		    http_stream:request_body("http://127.0.0.1:9090/chunk",[]))
+   end}.
+    

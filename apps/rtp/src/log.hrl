@@ -22,5 +22,5 @@
 %%%
 %%%---------------------------------------------------------------------------------------
 
--define(D(X), io:format("~p:~p ~240p~n", [?MODULE, ?LINE, X])).
--define(DBG(F,A), ems_log:debug(3, rtp, "(~w:~b) ~240p: " ++ F, [?MODULE, ?LINE, self()] ++ A)).
+-define(D(X), lager:info("~p:~p ~240p~n", [?MODULE, ?LINE, X])).
+-define(DBG(F,A), lager:info("(~w:~b) ~240p: " ++ F, [?MODULE, ?LINE, self()] ++ A)).

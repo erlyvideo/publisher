@@ -68,19 +68,18 @@ beward_test() ->
         address = "0.0.0.0"
       }
     }}],
-    video = [#stream_info{
+    streams = [#stream_info{
       content = video,
-      stream_id = 1,
+      track_id = 1,
       codec = h264,
       config = <<1,77,0,40,255,225,0,47,39,77,0,40,141,141,40,10,0,183,96,45,64,
                     64,64,80,0,0,62,128,0,12,53,6,134,0,80,0,0,89,244,187,203,141,
                     12,0,160,0,0,179,233,119,151,4,250,44,0,1,0,4,40,238,60,128>>, 
       params = #video_params{width = 1280, height = 720},
       timescale = 90.0
-    }],
-    audio = [#stream_info{
+    }, #stream_info{
       content = audio,
-      stream_id = 2,
+      track_id = 2,
       codec = pcma,
       config = undefined,
       params = #audio_params{channels = 1, sample_rate = 8000},
@@ -129,19 +128,18 @@ a=control:trackid=2
 quicktime_broadcaster_test() ->
   ?assertMatch(#media_info{
     flow_type = stream,
-    video = [#stream_info{
+    streams = [#stream_info{
       content = video,
-      stream_id = 2,
+      track_id = 2,
       codec = h264,
       config = <<1,77,0,12,255,225,0,20,39,77,64,12,169,24,80,143,203,128,53,6,1,6,182,194,
         181,239,124,4,1,0,5,40,222,9,23,160>>, 
       params = #video_params{width = 160, height = 120},
       timescale = 90.0,
       options = [{control,"trackid=2"},{payload_num, 97}]
-    }],
-    audio = [#stream_info{
+    }, #stream_info{
       content = audio,
-      stream_id = 1,
+      track_id = 1,
       codec = aac,
       config = <<21,136>>,
       params = #audio_params{channels = 1, sample_rate = 8000},
@@ -172,17 +170,16 @@ a=fmtp:96 packetization-mode=1; profile-level-id=420029; sprop-parameter-sets=Z0
 axis_m1011_test() ->
   ?assertMatch(#media_info{
     flow_type = stream,
-    video = [#stream_info{
+    streams = [#stream_info{
       content = video,
-      stream_id = 1,
+      track_id = 1,
       codec = h264,
       config = <<1,66,0,41,255,225,0,18,103,66,0,41,227,80,20,7,182,2,220,4,4,6,144,120,145,
         21,1,0,4,104,206,60,128>>, 
       params = #video_params{width = 640, height = 480},
       timescale = 90.0,
       options = [{control,"trackID=1"},{payload_num, 96}]
-    }],
-    audio = []
+    }]
   }, sdp:decode(axis_m1011_sdp())).
 
 
@@ -211,19 +208,18 @@ a=fmtp:97 profile-level-id=15; mode=AAC-hbr;config=1408; SizeLength=13; IndexLen
 axis_p1311_test() ->
   ?assertMatch(#media_info{
     flow_type = stream,
-    video = [#stream_info{
+    streams = [#stream_info{
       content = video,
-      stream_id = 1,
+      track_id = 1,
       codec = h264,
       config = <<1,66,0,41,255,225,0,18,103,66,0,41,227,80,20,7,182,2,220,4,4,6,144,120,145,
         21,1,0,4,104,206,60,128>>, 
       params = #video_params{width = 640, height = 480},
       timescale = 90.0,
       options = [{control,"rtsp://10.10.11.48:554/axis-media/media.amp/trackID=1?videocodec=h264"},{payload_num,96}]
-    }],
-    audio = [#stream_info{
+    }, #stream_info{
       content = audio,
-      stream_id = 2,
+      track_id = 2,
       codec = aac,
       config = <<20,8>>,
       timescale = 16.0,
@@ -253,17 +249,16 @@ a=fmtp:96 packetization-mode=1; profile-level-id=420029; sprop-parameter-sets=Z0
 axis_server_test() ->
   ?assertMatch(#media_info{
     flow_type = stream,
-    video = [#stream_info{
+    streams = [#stream_info{
       content = video,
-      stream_id = 1,
+      track_id = 1,
       codec = h264,
       config = <<1,66,0,41,255,225,0,18,103,66,0,41,227,80,20,7,182,2,220,4,4,6,144,120,145,
         21,1,0,4,104,206,60,128>>, 
       params = #video_params{width = 640, height = 480},
       timescale = 90.0,
       options = [{control,"trackID=1"},{payload_num,96}]
-    }],
-    audio = []
+    }]
   }, sdp:decode(axis_server_sdp())).
   
 % D-Link is an IP-camera, not AVC-camera. ertsp doesn't currently support it.
@@ -382,11 +377,11 @@ a=rtpmap:0 H263/90000\r
 linphone_mediainfo() ->
   #media_info{
     flow_type = stream,
-    audio = [
+    streams = [
       #stream_info{
         content = audio,
         codec = speex,
-        stream_id = 1,
+        track_id = 1,
         params = #audio_params{channels = 1, sample_rate = 16000},
         timescale = 16.0,
         options = [{vbr,true},{payload_num,111},{port, 7078}]
@@ -394,7 +389,7 @@ linphone_mediainfo() ->
       #stream_info{
         content = audio,
         codec = speex,
-        stream_id = 2,
+        track_id = 2,
         params = #audio_params{channels = 1, sample_rate = 8000},
         timescale = 8.0,
         options = [{vbr,true},{payload_num,110},{port, 7078}]
@@ -402,7 +397,7 @@ linphone_mediainfo() ->
       #stream_info{
         content = audio,
         codec = pcmu,
-        stream_id = 3,
+        track_id = 3,
         params = #audio_params{channels = 1, sample_rate = 8000},
         timescale = 8.0,
         options = [{payload_num,0},{port, 7078}]
@@ -410,17 +405,15 @@ linphone_mediainfo() ->
       #stream_info{
         content = audio,
         codec = pcma,
-        stream_id = 4,
+        track_id = 4,
         params = #audio_params{channels = 1, sample_rate = 8000},
         timescale = 8.0,
         options = [{payload_num,8},{port, 7078}]
-      }
-    ],
-    video = [
-      #stream_info{
+      },
+    #stream_info{
         content = video,
         codec = h263,
-        stream_id = 5,
+        track_id = 5,
         params = #video_params{},
         timescale = 90.0,
         options = [{payload_num,0},{port, 9078}]
@@ -457,7 +450,7 @@ a=fmtp:96 packetization-mode=1;profile-level-id=42E029;sprop-parameter-sets=Z0IA
 h264_stream_info() ->
   #stream_info{
     content = video,
-    stream_id = 1,
+    track_id = 1,
     codec = h264,
     config = <<1,66,0,41,255,225,0,18,103,66,0,41,227,80,20,7,182,2,220,4,4,6,144,120,145,
       21,1,0,4,104,206,60,128>>, 
@@ -479,7 +472,7 @@ a=fmtp:97 profile-level-id=1;mode=AAC-hbr;sizelength=13;indexlength=3;indexdelta
 aac_stream_info() ->
   #stream_info{
     content = audio,
-    stream_id = 2,
+    track_id = 2,
     codec = aac,
     config = <<18,16>>, 
     params = #audio_params{channels = 2, sample_rate = 44100},
@@ -496,7 +489,7 @@ a=rtpmap:8 PCMA/8000/1\r
 ">>, 
   sdp:encode(#stream_info{
     content = audio,
-    stream_id = 2,
+    track_id = 2,
     codec = pcma,
     params = #audio_params{channels = 1, sample_rate = 8000},
     timescale = 8,
@@ -535,7 +528,7 @@ a=zrtp-hash:1.10 5e247e69a6acf00590ff6bd7fc45bfcaed9647bf1d61f220450cf54261410b3
 
 
 decode_jitsy_test() ->
-  ?assertMatch(#media_info{audio = [
+  ?assertMatch(#media_info{streams = [
     #stream_info{content = audio, codec = g722, params = #audio_params{channels = 1, sample_rate = 8000}},
     #stream_info{content = audio, codec = speex, params = #audio_params{channels = 1, sample_rate = 32000}},
     #stream_info{content = audio, codec = speex, params = #audio_params{channels = 1, sample_rate = 16000}},
@@ -546,8 +539,7 @@ decode_jitsy_test() ->
     #stream_info{content = audio, codec = dvi4, params = #audio_params{channels = 1, sample_rate = 8000}},
     #stream_info{content = audio, codec = dvi4, params = #audio_params{channels = 1, sample_rate = 16000}},
     #stream_info{content = audio, codec = g728, params = #audio_params{channels = 1, sample_rate = 8000}},
-    #stream_info{content = audio, codec = telephone, params = #audio_params{channels = 1, sample_rate = 8000}}
-  ], video = [
+    #stream_info{content = audio, codec = telephone, params = #audio_params{channels = 1, sample_rate = 8000}},
     #stream_info{content = video, codec = h264}
   ]}, sdp:decode(sdp_tests:jitsy_sdp())).
 
@@ -615,6 +607,25 @@ c=IN IP4 0.0.0.0/127
 a=control:trackID=0
 ">>.
 
+aviglion_sdp() ->
+<<"v=0
+o=- 1331675349299 1331675349299 IN IP4 94.80.16.122
+s=Live
+t=0 0
+m=audio 0 RTP/AVP 0
+c=IN IP4 94.80.16.122
+a=control:rtsp://94.80.16.122/defaultPrimary0/mic0/trackID=1
+m=video 0 RTP/AVP 96
+c=IN IP4 94.80.16.122
+a=control:rtsp://94.80.16.122/defaultPrimary0/cam0/trackID=2
+a=fmtp:96 packetization-mode=0; profile-level-id=42A01E; sprop-parameter-sets=Z01AHppigWgk/4C1BQUFQAAA+gAAMNQ6GA8QA8Fu8uNDAeIAeC3eXCg=,aO48gA==
+a=rtpmap:96 H264/90000
+a=x-avg-params:96 source-height=576; source-width=720
+m=application 0 RTP/AVP 98
+c=IN IP4 94.80.16.122
+a=control:rtsp://94.80.16.122/defaultPrimary0/metadata0/trackID=1
+a=rtpmap:98 vnd.onvif.metadata/90000
+">>.
 
 
 encoder_test() ->
@@ -633,7 +644,7 @@ encoder_test() ->
                          recvonly,
                          {range, "npt=0-"}
                         ]},
-  Media = #media_info{audio = [aac_stream_info()], video = [h264_stream_info()], options = [{sdp_session, Session}]},
+  Media = #media_info{streams = [aac_stream_info(), h264_stream_info()], options = [{sdp_session, Session}]},
   io:format("~p~n", [sdp:encode(Media)]),
   ?assertEqual(full_server_sdp(), sdp:encode(Media)).
 
@@ -645,16 +656,30 @@ encoder_test1() ->
     options = [{connect, {inet4, "10.11.12.13"}}, {port, 1500}, {control, <<"trackID=1">>}],
     codec = pcma,
     timescale = 90,
-    stream_id = 1,
+    track_id = 1,
     params = #video_params{}
   },
   MediaA = #stream_info{
     content = audio,
     options = [{connect, {inet4, "10.11.12.13"}}, {port, 1600}, {control, <<"trackID=2">>}],
     codec = aac,
-    stream_id = 2,
+    track_id = 2,
     timescale = 48,
     params = #audio_params{channels = 2, sample_rate = 48000},
     config = <<14,23>>
   },
-  ?assertEqual(full_server_sdp(), sdp:encode(Sess, #media_info{audio = [MediaA], video = [MediaV]})).
+  ?assertEqual(full_server_sdp(), sdp:encode(Sess, #media_info{streams = [MediaV, MediaA]})).
+
+
+grandstream_sdp() ->
+<<"v=0
+o=StreamingServer 3331435948 1116907222000 IN IP4 2.116.3.222
+s=h264.mp4
+c=IN IP4 0.0.0.0
+t=0 0
+a=control:*
+m=video 0 RTP/AVP 96
+a=control:trackID=0
+a=rtpmap:96 H264/90000
+a=fmtp:96 packetization-mode=1; sprop-parameter-sets=Z0LgCtoLExA=,aM4wpIA=
+">>.

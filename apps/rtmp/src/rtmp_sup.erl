@@ -27,7 +27,7 @@
 
 -behaviour(supervisor).
 
--export([init/1,start_link/0, start_rtmpt/2, start_rtmp_socket/1, start_rtmp_listener/4]).
+-export([init/1,start_link/0, start_rtmpt/2, start_rtmp_socket/1, start_rtmp_listener/4, stop_rtmp_listener/1]).
 -export([start_shared_object/2, start_rtmp_session/2]).
 
 %%--------------------------------------------------------------------
@@ -43,8 +43,9 @@ start_rtmpt(SessionID, IP) -> supervisor:start_child(rtmpt_session_sup, [Session
 start_rtmp_socket(Type) -> supervisor:start_child(rtmp_socket_sup, [Type]).
 
 -spec start_rtmp_session(RTMPSocket::pid(), Callback::atom()) -> {'error',_} | {'ok',pid()}.
-start_rtmp_session(_RTMPSocket, Callback) ->
+start_rtmp_session(RTMPSocket, Callback) ->
   {ok, Pid} = supervisor:start_child(rtmp_session_sup, [Callback]),
+  rtmp_session:set_socket(Pid, RTMPSocket),
   {ok, Pid}.
 
 
@@ -62,6 +63,9 @@ start_rtmp_listener(Port, Name, Callback, Args) ->
   },
   supervisor:start_child(?MODULE, Listener).
 
+stop_rtmp_listener(Name) ->
+  supervisor:terminate_child(?MODULE, Name),
+  supervisor:delete_child(?MODULE, Name).
 
 init([shared_object]) ->
   {ok,

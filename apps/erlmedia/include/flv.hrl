@@ -20,6 +20,7 @@
 -type(flv_specific_tag()::flv_audio_tag()|flv_video_tag()|flv_metadata()).
 
 -record(flv_tag, {
+  encrypted          ::boolean(),
   type               ::frame_content(),
   flavor             ::frame_flavor(),  % keyframe or frame
   timestamp          ::number(),

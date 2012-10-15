@@ -1,5 +1,6 @@
 -record(aac_config, {
   type,
+  adts_header,
   sample_rate,
   channels,
   channel_count,

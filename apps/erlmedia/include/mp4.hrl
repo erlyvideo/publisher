@@ -1,8 +1,6 @@
 -record(frame_id, {
   id,
-  a,
-  v,
-  t
+  tracks = []
 }).
 
 -record(mp4_media, {
@@ -18,6 +16,7 @@
   frames,
   additional = [],
   reader,
+  data_borders,
   options
 }).
 
@@ -42,11 +41,13 @@
   sample_composition = [],
   keyframes = [],
   chunk_offsets = [],
-  chunk_sizes = []
+  chunk_sizes = [],
+  elst
 }).
 
 -record(mp4_frame, {
   id,
+  track_id,
   dts,
   size,
   pts,
@@ -62,7 +63,3 @@
 
 }).
 
--define(MP4ESDescrTag, 3).
--define(MP4DecConfigDescrTag, 4).
--define(MP4DecSpecificDescrTag, 5).
--define(MP4Unknown6Tag, 6).

@@ -49,11 +49,11 @@
 -include("rtmp_private.hrl").
 -version(1.1).
 
--export([accept/1, connect/1, start_link/1, getopts/2, setopts/2, getstat/2, getstat/1, send/2, get_socket/1]).
+-export([accept/1, connect/1, connect/2, start_link/1, getopts/2, setopts/2, getstat/2, getstat/1, send/2, get_socket/1]).
 -export([status/3, status/4, prepare_status/2, prepare_status/3, invoke/2, invoke/4, prepare_invoke/3, notify/4, prepare_notify/3]).
 -export([notify_audio/3, notify_video/3]).
 
--export([start_socket/2, start_server/3, start_server/4, set_socket/2]).
+-export([start_socket/2, start_server/3, start_server/4, stop_server/1, set_socket/2]).
 -export([close/1]).
   
 
@@ -78,6 +78,8 @@ start_server(Port, Name, Callback) ->
 start_server(Port, Name, Callback, Args) ->
   rtmp_sup:start_rtmp_listener(Port, Name, Callback, Args).
 
+stop_server(Name) ->
+  rtmp_sup:stop_rtmp_listener(Name).
 
 %% @spec (Socket::port()) -> {ok, RTMP::pid()}
 %% @doc Accepts client connection on socket Socket, starts RTMP decoder, passes socket to it
@@ -94,13 +96,19 @@ accept(Socket) ->
 %% and returns pid of newly created RTMP socket.
 %% @end
 -spec(connect(Socket::port()|string()) -> {ok, RTMPSocket::pid()}).
-connect(ServerSpec) when is_binary(ServerSpec) ->
-  connect(binary_to_list(ServerSpec));
+connect(ServerSpec) ->
+  connect(ServerSpec, [{timeout, 10000}]).
 
-connect(ServerSpec) when is_list(ServerSpec) ->
+-spec(connect(Socket::port()|string(), Options::list()) -> {ok, RTMPSocket::pid()}).
+connect(ServerSpec, Options) when is_binary(ServerSpec) ->
+  connect(binary_to_list(ServerSpec), Options);
+
+connect(ServerSpec, Options) when is_list(ServerSpec) ->
   {_Proto,_Auth,Host,Port,_Path,_Query} = http_uri2:parse(ServerSpec),
-  case gen_tcp:connect(Host, Port, [binary, {active, false}, {packet, raw}]) of
+  Timeout = proplists:get_value(timeout, Options, 10000),
+  case gen_tcp:connect(Host, Port, [binary, {active, false}, {packet, raw}], Timeout) of
     {ok, Socket} ->
+      inet:setopts(Socket, [{send_timeout,proplists:get_value(send_timeout,Options,Timeout)}]),
       {ok, Pid} = connect(Socket),
       setopts(Pid, [{url, ServerSpec}]),
       {ok, Pid};
@@ -108,7 +116,7 @@ connect(ServerSpec) when is_list(ServerSpec) ->
       {error, Reason}
   end;
 
-connect(Socket) when is_port(Socket) ->
+connect(Socket, _Options) when is_port(Socket) ->
   {ok, Pid} = start_socket(connect, Socket),
   setopts(Pid, [{consumer,self()}]),
   {ok,Pid}.
@@ -264,9 +272,14 @@ prepare_invoke(StreamId, Command, Args) when is_integer(StreamId) ->
 invoke(RTMP, StreamId, Command, Args) ->
   send(RTMP, prepare_invoke(StreamId, Command, Args)).
 
-invoke(RTMP, #rtmp_funcall{stream_id = StreamId} = AMF) ->
-  send(RTMP, #rtmp_message{stream_id = StreamId, type = invoke, body = AMF}).
+invoke(RTMP, #rtmp_funcall{stream_id = StreamId, id = undefined} = AMF) ->
+  InvokeId = gen_fsm:sync_send_all_state_event(RTMP, next_invoke_id),
+  send(RTMP, #rtmp_message{stream_id = StreamId, type = invoke, body = AMF#rtmp_funcall{id = InvokeId}}),
+  {ok, InvokeId};
 
+invoke(RTMP, #rtmp_funcall{stream_id = StreamId, id = InvokeId} = AMF) ->
+  send(RTMP, #rtmp_message{stream_id = StreamId, type = invoke, body = AMF}),
+  {ok, InvokeId}.
 
   
 %% @private  
@@ -286,7 +299,7 @@ wait_for_socket_on_server(timeout, State) ->
 wait_for_socket_on_server({socket, Socket}, #rtmp_socket{} = State) when is_port(Socket) ->
   case inet:peername(Socket) of
     {ok, {IP, Port}} ->
-      ok =  inet:setopts(Socket, [{active, once}, {packet, raw}, binary]),
+      ok =  inet:setopts(Socket, [{active, once}, {packet, raw}, binary, {send_timeout, 3000}]),
       {next_state, handshake_c1, State#rtmp_socket{socket = Socket, address = IP, port = Port}, ?RTMP_TIMEOUT};
     {error, _Error} ->
       {stop, normal, State}
@@ -450,6 +463,9 @@ handle_event(Event, StateName, StateData) ->
 %% @private
 %%-------------------------------------------------------------------------
 
+handle_sync_event(next_invoke_id, _From, StateName, #rtmp_socket{out_invoke_id = Id} = Socket) ->
+  {reply, Id, StateName, Socket#rtmp_socket{out_invoke_id = Id + 1}, ?RTMP_TIMEOUT};
+
 handle_sync_event({getopts, Options}, _From, StateName, State) ->
   {reply, get_options(State, Options), StateName, State, ?RTMP_TIMEOUT};
 
@@ -598,6 +614,14 @@ flush_send(State) ->
     0 -> State
   end.
   
+flush_all() ->
+  receive
+    _Msg -> flush_all()
+  after
+    0 -> ok
+  end.
+      
+  
 activate_socket(#rtmp_socket{socket = Socket}) when is_port(Socket) ->
   inet:setopts(Socket, [{active, once}]);
 activate_socket(#rtmp_socket{socket = Socket}) when is_pid(Socket) ->
@@ -646,18 +670,24 @@ send_data(#rtmp_socket{socket = Socket, key_out = KeyOut} = State, Message) ->
     _ -> 
       {State, Message}
   end,
-  {NewKeyOut, Crypt} = case KeyOut of
-    undefined -> {undefined, Data};
-    _ -> rtmpe:crypt(KeyOut, Data)
+  {NewState1, Crypt} = case KeyOut of
+    undefined -> {NewState, Data};
+    _ -> 
+      {NewKeyOut, OutCrypt} = rtmpe:crypt(KeyOut, Data),
+      {NewState#rtmp_socket{key_out = NewKeyOut}, OutCrypt}
   end,
   % (catch rtmp_stat_collector:out_bytes(self(), iolist_size(Crypt))),
   if
     is_port(Socket) ->
-      gen_tcp:send(Socket, Crypt);
+      case gen_tcp:send(Socket, Crypt) of
+        ok -> ok;
+        {error, timeout} -> flush_all(), throw({stop, network_timeout, NewState1});
+        {error, Else} -> flush_all(), throw({stop, {network_error,Else}, NewState1})
+      end;
     is_pid(Socket) ->
       rtmpt:write(Socket, Crypt)
   end,
-  NewState#rtmp_socket{key_out = NewKeyOut}.
+  NewState1.
 
 
 
@@ -683,7 +713,7 @@ print_rtmp_message(InOut, #rtmp_message{channel_id = Channel, ts_type = TSType, 
   ok;
 
 print_rtmp_message(InOut, Msg) ->
-  io:format("~p ~s~n", [InOut, io_lib_pretty_limited:print(Msg, 20)]),
+  io:format("~p ~p~n", [InOut, Msg]),
   ok.
   
 

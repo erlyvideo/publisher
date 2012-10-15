@@ -57,7 +57,7 @@ to_fmtp(h264, Config) -> h264:to_fmtp(Config);
 to_fmtp(aac, Config) -> aac:to_fmtp(Config);
 to_fmtp(_, _) -> undefined.
 
-encode(#stream_info{content = Content, codec = Codec, stream_id = Id, options = Options, config = Config, timescale = Timescale, params = Params} = Stream) ->
+encode(#stream_info{content = Content, codec = Codec, track_id = Id, options = Options, config = Config, timescale = Timescale, params = Params} = Stream) ->
   FMTP = case to_fmtp(Codec, Config) of
     undefined -> "";
     Else -> io_lib:format("a=fmtp:~p ~s\r\n", [payload_type(Codec), Else])
@@ -81,12 +81,11 @@ encode(#stream_info{content = Content, codec = Codec, stream_id = Id, options = 
   ],
   iolist_to_binary(SDP);
 
-encode(#media_info{video = Video, audio = Audio, options = Options} = MediaInfo) ->
+encode(#media_info{streams = Streams, options = Options} = MediaInfo) ->
   iolist_to_binary([
     encode_sdp_session(proplists:get_value(sdp_session, Options)),
     encode_media_info(MediaInfo),
-    [encode(V) || V <- Video],
-    [encode(A) || A <- Audio]
+    [encode(S) || S <- Streams]
   ]).
 
 

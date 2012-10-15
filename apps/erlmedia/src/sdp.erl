@@ -73,6 +73,7 @@ sdp_codecs() ->
   {pcma, "PCMA"},
   {pcmu, "PCMU"},
   {g726_16, "G726-16"},
+  {g726_32, "G726-32"},
   {mpa, "MPA"},
   {mp4a, "MP4A-LATM"},
   {mp4v, "MP4V-ES"},
@@ -114,14 +115,16 @@ decode(SDP) when is_binary(SDP) ->
   end,
   StreamSeries = [decode_stream_infos(ContentSDP) || ContentSDP <- MediaSDP],
   Streams = lists:foldl(fun(Serie, Acc) -> Acc ++ Serie end, [], StreamSeries),
-  NumberedStreams = lists:zipwith(fun(Num, Stream) -> Stream#stream_info{stream_id = Num} end, lists:seq(1, length(Streams)), Streams),
-  Filter = fun(Type) -> lists:filter(fun(#stream_info{content = Content}) -> Content == Type end, NumberedStreams) end,
-  #media_info{
+  NumberedStreams = lists:zipwith(fun(Num, Stream) -> Stream#stream_info{track_id = Num} end, lists:seq(1, length(Streams)), Streams),
+  MediaInfo1 = #media_info{
     flow_type = stream,
     options = [{sdp_session, SDPSession}] ++ RemoteAddr,
-    audio = Filter(audio),
-    video = Filter(video)
-  }.
+    streams = NumberedStreams
+  },
+  ConfigFrames = video_frame:config_frames(MediaInfo1),
+  lists:foldl(fun(Frame, MI) ->
+    video_frame:define_media_info(MI, Frame)
+  end, MediaInfo1, ConfigFrames).
 
 
 decode_sdp_session(SDP) ->
@@ -252,10 +255,13 @@ parse_audio_fmtp(#stream_info{codec = Codec, options = Options} = Stream, Opts) 
 parse_video_fmtp(#stream_info{codec = Codec} = Stream, Opts) ->
   case proplists:get_value("sprop-parameter-sets", Opts) of
     undefined -> Stream;
-    Sprop when is_list(Sprop) andalso Codec == h264 ->
-      ProfileLevelId = proplists:get_value("profile-level-id", Opts),
-      Profile = erlang:list_to_integer(string:sub_string(ProfileLevelId, 1, 2), 16),
-      Level = erlang:list_to_integer(string:sub_string(ProfileLevelId, 5, 6), 16),
+    Sprop when is_list(Sprop) ->
+      {Profile, Level} = case proplists:get_value("profile-level-id", Opts) of
+        undefined -> {16#42, 16#1E};
+        ProfileLevelId -> 
+          {erlang:list_to_integer(string:sub_string(ProfileLevelId, 1, 2), 16),
+          erlang:list_to_integer(string:sub_string(ProfileLevelId, 5, 6), 16)}
+      end,
 
       NALS = [base64:decode(S) || S <- string:tokens(Sprop, ",")],
       [SPS|_] = [NAL || NAL <- NALS, h264:type(NAL) == sps],
