@@ -21,3 +21,16 @@ cd publisher
 make linux
 ./run
 ```
+
+
+Vagrant launch
+==============
+
+Install http://vagrantup.com/  then 
+
+```
+vagrant up
+vagrant ssh
+cd publisher
+./run
+```
