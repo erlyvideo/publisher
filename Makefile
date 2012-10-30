@@ -1,6 +1,7 @@
 include version.mk
 
 all: compile
+	
 
 
 compile: 
@@ -9,7 +10,7 @@ compile:
 	./rebar compile
 
 linux:
-	./rebar -C rebar-linux.config get-deps compile
+	ERL_LIBS=apps ./rebar -C rebar-linux.config get-deps compile
 
 clean:
 	./rebar clean
