@@ -1,6 +1,8 @@
 # -*- mode: ruby -*-
 # vi: set ft=ruby :
 
+`mkdir -p .vagrant_aptcache`
+
 Vagrant::Config.run do |conf|
 
   conf.vm.box = "squeeze64"
@@ -8,4 +10,5 @@ Vagrant::Config.run do |conf|
   conf.vm.provision :shell, :path => "squeeze64.sh"
   conf.vm.forward_port 8080, 9180
 
+  conf.vm.share_folder "v-apt", "/var/cache/apt", ".vagrant_aptcache"
 end

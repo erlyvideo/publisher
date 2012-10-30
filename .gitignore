@@ -3,3 +3,4 @@ publisher.conf
 
 log
 .vagrant
+.vagrant_aptcache
