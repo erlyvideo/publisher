@@ -15,8 +15,9 @@ Debian installation
 -------------------
 
 ```
-apt-get install git libasound2-dev libfaac-dev libx264-dev libswscale-dev
+apt-get install build-essential erlang-nox git libasound2-dev libfaac-dev libx264-dev libswscale-dev
 git clone git://github.com/erlyvideo/publisher.git
 cd publisher
-make
+make linux
+./run
 ```

@@ -1,0 +1,7 @@
+#!/bin/sh
+
+export RUN_ERL_LOG_GENERATIONS=100
+export RUN_ERL_LOG_MAXSIZE=1000000
+mkdir -p log
+run_erl -daemon log/ log/ "exec ./run"
+
