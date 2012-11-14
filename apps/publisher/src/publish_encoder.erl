@@ -115,7 +115,8 @@ start_uvc_capture(#encoder{clients = Clients, last_dts = DTS} = Encoder, VideoOp
   H264Config = proplists:get_value(config, VideoOptions, "h264/encoder.preset"),
   X264Options = [{width,W},{height,H},{config,H264Config},{annexb,false}|VideoOptions],
   {ok, X264, VConfig} = proc_lib:start_link(?MODULE, x264_helper, [self(), X264Options]),
-  [Client ! VConfig#video_frame{dts = DTS, pts = DTS} || Client <- Clients],
+  real_send(VConfig#video_frame{dts = DTS, pts = DTS}, Encoder),
+  % [Client ! VConfig#video_frame{dts = DTS, pts = DTS} || Client <- Clients],
   Encoder#encoder{uvc = UVC, vconfig = VConfig, width = W, height = H, x264 = X264}.
 
 
@@ -131,7 +132,8 @@ start_rtsp_capture(#encoder{clients = Clients, last_dts = DTS} = Encoder, VideoO
   erlang:monitor(process, RTSP),
   % ems_media:play(Media, []),
   VConfig = video_frame:config_frame(VideoStream),
-  [Client ! VConfig#video_frame{dts = DTS, pts = DTS} || Client <- Clients],
+  % [Client ! VConfig#video_frame{dts = DTS, pts = DTS} || Client <- Clients],
+  real_send(VConfig#video_frame{dts = DTS, pts = DTS}, Encoder),
   
   Encoder#encoder{vconfig = VConfig}.
 
