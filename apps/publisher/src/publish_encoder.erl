@@ -90,12 +90,9 @@ ensure_capture(#encoder{start = undefined, clients = _Clients, options = _Option
   %   body = [<<"@setDataFrame">>,<<"onMetaData">>, {object, Meta}]
   % },
   % [Client ! MetaFrame || Client <- Clients],
-  Encoder2 = start_h264_capture(Encoder1),
+  Encoder2 = start_h264_capture(Encoder1#encoder{last_dts =0, start = erlang:now()}),
   Encoder3 = start_aac_capture(Encoder2),
-  Encoder3#encoder{
-    last_dts = 0,
-    start = erlang:now()
-  };
+  Encoder3;
 
 ensure_capture(Encoder) ->
   Encoder.
