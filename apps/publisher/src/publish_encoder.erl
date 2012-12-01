@@ -108,7 +108,7 @@ start_h264_capture(#encoder{options = Options} = Encoder) ->
     rtsp -> start_rtsp_capture(Encoder, VideoOptions)
   end.
 
-start_uvc_capture(#encoder{clients = Clients, last_dts = DTS} = Encoder, VideoOptions) ->
+start_uvc_capture(#encoder{clients = _Clients, last_dts = DTS} = Encoder, VideoOptions) ->
   {ok, UVC} = uvc:capture([{format,yuv},{consumer,self()}|VideoOptions]),
   erlang:monitor(process, UVC),
   {W,H} = proplists:get_value(size, VideoOptions),
@@ -120,7 +120,7 @@ start_uvc_capture(#encoder{clients = Clients, last_dts = DTS} = Encoder, VideoOp
   Encoder#encoder{uvc = UVC, vconfig = VConfig, width = W, height = H, x264 = X264}.
 
 
-start_rtsp_capture(#encoder{clients = Clients, last_dts = DTS} = Encoder, VideoOptions) ->
+start_rtsp_capture(#encoder{clients = _Clients, last_dts = DTS} = Encoder, VideoOptions) ->
   application:start(log4erl),
   application:start(rtsp),
   {ok, RTSP} = rtsp_reader:start_link(proplists:get_value(url,VideoOptions), [{consumer,self()}]),
