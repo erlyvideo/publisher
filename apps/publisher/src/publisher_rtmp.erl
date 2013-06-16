@@ -42,7 +42,7 @@
 
 
 start_link(Type, RTMP, Options) ->
-  gen_server:start_link({local, publisher_instance}, ?MODULE, [Type, RTMP, Options], []).
+  gen_server:start_link(?MODULE, [Type, RTMP, Options], []).
 
 
 stop(RTMP) ->

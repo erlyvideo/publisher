@@ -52,7 +52,13 @@ start_publish_reconnector(URL, Name, Options) ->
   }).
 
 start_publisher(Type, URL, Options) ->
-  supervisor:start_child(publisher_rtmp_sup, [Type, URL, Options]).
+  supervisor:start_child(publisher_rtmp_sup, {URL, 
+    {publisher_rtmp, start_link, [Type, URL, Options]},
+    temporary,
+    200,
+    worker,
+    []
+  }).
 
 start_listener(Listen, Options) ->
   rtmp_socket:start_server(Listen, publish_listener1, publish_listener, [Options]).
@@ -73,15 +79,7 @@ start_encoder(Name, Options) ->
 %% ===================================================================
 
 init([publisher_rtmp]) ->
-  {ok, {{simple_one_for_one, 1, 100}, [
-    {undefined,                               % Id       = internal id
-    {publisher_rtmp,start_link,[]},                  % StartFun = {M, F, A}
-    temporary,                               % Restart  = permanent | transient | temporary
-    2000,                                    % Shutdown = brutal_kill | int() >= 0 | infinity
-    worker,                                  % Type     = worker | supervisor
-    []                                       % Modules  = [Module] | dynamic
-    }
-  ]}};
+  {ok, {{one_for_one, 1, 100}, []}};
 
 init([]) ->
   Supervisors = [

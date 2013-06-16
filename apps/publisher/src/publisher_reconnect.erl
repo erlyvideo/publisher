@@ -39,6 +39,7 @@ start_link(URL, Options) ->
 -record(reconnector, {
   url,
   options,
+  rtmp_pid,
   schedule_url,
   schedule
 }).
@@ -69,15 +70,14 @@ handle_info(check, #reconnector{schedule_url = URL, schedule = undefined} = Stat
   {ok, Schedule} = publish_schedule:fetch(URL),
   handle_info(check, State#reconnector{schedule = Schedule});
 
-handle_info(check, #reconnector{url = URL, schedule_url = ScheduleUrl, options = Options, schedule = Schedule} = State) ->
+handle_info(check, #reconnector{url = URL, rtmp_pid = OldPid, schedule_url = ScheduleUrl, options = Options, schedule = Schedule} = State) ->
   flush_check(),
   
   IsStreamingScheduled = case ScheduleUrl of
     undefined -> true;
     _ -> publish_schedule:is_streaming_scheduled(Schedule)
   end,
-  OldPid = whereis(publisher_instance),
-  PublisherIsActive = is_alive(OldPid),
+  PublisherIsActive = is_pid(OldPid) andalso is_alive(OldPid),
   
   timer:send_after(?CHECK_TIMEOUT, check),
   case {IsStreamingScheduled,PublisherIsActive} of
@@ -85,8 +85,8 @@ handle_info(check, #reconnector{url = URL, schedule_url = ScheduleUrl, options =
       {noreply, State};
     {true, false} ->
       ?D({need_to_launch, URL}),
-      publisher_sup:start_publisher(active, URL, Options),
-      {noreply, State};
+      {ok, Pid} = publisher_sup:start_publisher(active, URL, Options),
+      {noreply, State#reconnector{rtmp_pid = Pid}};
     {false, false} ->
       {noreply, State};
     {false, true} ->

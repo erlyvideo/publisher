@@ -6,6 +6,9 @@
 -define(TIME, 3).
 
 main([]) ->
+  main([undefined]);
+
+main([ConfigPath]) ->
   io:format("UVC streamer~n"),
   %erlang:system_flag(scheduler_bind_type, spread),
   %io:format("~p~n", [erlang:system_info(scheduler_bind_type)]),
@@ -18,7 +21,11 @@ main([]) ->
     {error, enoent} -> os:cmd("cp "++Root++"/publisher.conf.sample "++Root++"/publisher.conf");
     _ -> ok
   end,
-  {ok, Pid} = publisher:run(),
+  Options = case ConfigPath of
+    undefined -> [];
+    _ -> [{config,ConfigPath}]
+  end,
+  {ok, Pid} = publisher:run(Options),
   erlang:monitor(process, Pid),
   receive
     stop -> ok;

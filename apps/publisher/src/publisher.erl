@@ -28,9 +28,12 @@
 
 -define(D(X), io:format("~p:~p ~p~n", [?MODULE, ?LINE, X])).
 
--export([publish/3, listen/2, encode/2, run/0]).
+-export([publish/3, listen/2, encode/2, run/0, run/1]).
 
 run() ->
+  run([]).
+
+run(Options) ->
   application:load(lager),
   application:set_env(lager,handlers,[{lager_console_backend,info}]),
   lager:start(),
@@ -41,7 +44,10 @@ run() ->
   application:start(rtmp),
   application:start(publisher),
   io:format("Starting~n"),
-  {ok, Config, ConfigPath} = file:path_consult([".", "/media/usb", "/etc/publisher"], "publisher.conf"),
+  {ok, Config, ConfigPath} = case proplists:get_value(config,Options) of
+    undefined -> file:path_consult([".", "/media/usb", "/etc/publisher"], "publisher.conf");
+    CfgPath -> {ok, Conf} = file:consult(CfgPath), {ok, Conf, CfgPath}
+  end,
   io:format("Read config from ~s~n", [ConfigPath]),
   
   load_config(Config),
@@ -50,6 +56,7 @@ run() ->
 
 
 load_config([{capture, Camera, Options}|Config]) ->
+  io:format("Start capture ~s\n", [Camera]),
   publisher:encode(Camera, Options),
   load_config(Config);
   
@@ -57,6 +64,7 @@ load_config([{publish, Camera, Publisher, RTMP}|Config]) ->
   load_config([{publish, Camera, Publisher, RTMP, []}|Config]);
 
 load_config([{publish, Camera, Publisher, RTMP, Options}|Config]) ->
+  io:format("Start publisher ~s from camera ~s\n", [Publisher, Camera]),
   publisher:publish(RTMP, Publisher, [{encoder,Camera}|Options]),
   load_config(Config);
 
@@ -66,6 +74,9 @@ load_config([{listen, Port}|Config]) ->
 
 load_config([{listen, Port, Options}|Config]) ->
   publisher:listen(Port, Options),
+  load_config(Config);
+
+load_config([_|Config]) ->
   load_config(Config);
 
 load_config([]) ->
