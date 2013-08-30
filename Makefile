@@ -12,6 +12,9 @@ compile:
 linux:
 	ERL_LIBS=apps ./rebar -C rebar-linux.config get-deps compile
 
+linux-compile:
+	ERL_LIBS=apps ./rebar -C rebar-linux.config get-deps compile
+
 clean:
 	./rebar clean
 

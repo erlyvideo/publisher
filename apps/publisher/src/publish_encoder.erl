@@ -145,6 +145,7 @@ start_alsa_capture(#encoder{clients = Clients, last_dts = DTS} = Encoder, AudioO
   SampleRate = proplists:get_value(sample_rate, AudioOptions, 32000),
   Channels = proplists:get_value(channels, AudioOptions, 2),
   Device = proplists:get_value(device, AudioOptions, -1),
+  lager:info("Starting alsa capture:  rate=~p, channels=~p, device=~p", [SampleRate, Channels,Device]),
   {ok, Capture} = alsa:start(SampleRate, Channels, Device),
   AACOptions = [{sample_rate,SampleRate},{channels,Channels}],
   {ok, AACEnc, AConfig} = proc_lib:start_link(?MODULE, faac_helper, [self(), AACOptions]),
@@ -171,8 +172,10 @@ x264_loop(Master, X264) ->
         #video_frame{} = Frame -> Master ! Frame
       end,
       x264_loop(Master, X264);
+    {'DOWN', _, _, Master, _} ->
+      lager:info("x264 loop is stopping due to master death");
     Else ->
-      io:format("x264_loop is stopping: ~p~n", [Else])
+      lager:info("x264_loop is stopping: ~p~n", [Else])
   end.
 
 
@@ -199,7 +202,7 @@ faac_loop(Master, AAC) ->
       end,
       faac_loop(Master, AAC);
     Else ->
-      io:format("faac_loop is stopping: ~p~n", [Else])  
+      lager:info("faac_loop is stopping: ~p~n", [Else])  
   end.
 
 
@@ -212,7 +215,7 @@ drop() ->
     true -> 0
   end,
   if
-    Count > 0 -> error_logger:warning_msg("Drop ~p frames in publisher~n", [Count]);
+    Count > 0 -> lager:error("Drop ~p frames in publisher~n", [Count]);
     true -> ok
   end.
   
@@ -240,7 +243,7 @@ handle_call(status, _From, #encoder{buffer = Buf, start = Start} = State) ->
   {reply, Status, State};
 
 handle_call({subscribe, Client}, _From, #encoder{clients = Clients, aconfig = AConfig, vconfig = VConfig, x264 = X264, last_dts = DTS} = State) ->
-  io:format("Subscribe ~p, ~p, ~p, ~p~n", [Client, DTS, VConfig, AConfig]),
+  lager:info("Subscribe ~p, ~p, ~p, ~p~n", [Client, DTS, VConfig, AConfig]),
   if AConfig == undefined -> ok; true -> Client ! AConfig#video_frame{dts = DTS, pts = DTS} end,
   if VConfig == undefined -> ok; true -> Client ! VConfig#video_frame{dts = DTS, pts = DTS} end,
   (catch X264 ! keyframe),
@@ -260,7 +263,7 @@ check_frame_delay(#video_frame{dts = DTS} = Frame, Frames) ->
   case [true || #video_frame{dts = D} <- Frames, abs(D - DTS) > ?THRESHOLD] of
     [] -> true;
     _ ->
-      io:format("Frame ~p delayed: ~p~n", [Frame, [{C,D} || #video_frame{codec = C, dts = D} <- Frames]]),
+      lager:debug("Frame ~p delayed: ~p~n", [Frame, [{C,D} || #video_frame{codec = C, dts = D} <- Frames]]),
       false
   end.
 
@@ -288,11 +291,7 @@ frame_sorter(#video_frame{}, #video_frame{}) -> false.
 real_send(ToSend, #encoder{clients = Clients, start = Start} = State) ->
   AbsDelta = timer:now_diff(erlang:now(), Start) div 1000,
   lists:foreach(fun(F1) ->
-    case get(debug) of
-      true ->
-        io:format("~4s ~8s ~8B ~8B ~8B ~8B~n", [F1#video_frame.codec, F1#video_frame.flavor, round(F1#video_frame.dts), round(F1#video_frame.pts), AbsDelta, round(AbsDelta - F1#video_frame.dts)]);
-      _ -> ok
-    end,
+    lager:debug("~4s ~8s ~8B ~8B ~8B ~8B~n", [F1#video_frame.codec, F1#video_frame.flavor, round(F1#video_frame.dts), round(F1#video_frame.pts), AbsDelta, round(AbsDelta - F1#video_frame.dts)]),
     [Client ! F1 || Client <- Clients]
   end, ToSend),
   State.
@@ -349,15 +348,18 @@ handle_info({alsa, _Capture, DTS, PCM}, #encoder{faac = AACEnc} = State) ->
   {noreply, State#encoder{audio_count = AudioCount}};
 
 handle_info({'DOWN', _, process, UVC, _Reason}, #encoder{uvc = UVC} = Server) ->
+  lager:info("Encoder stopping due to UVC exit: ~p", [_Reason]),
   {stop, normal, Server};
 
 handle_info({'DOWN', _, process, Client, _Reason}, #encoder{clients = Clients} = Server) ->
   case lists:member(Client, Clients) of
-    true when length(Clients) == 1 ->
-      {stop, normal, Server};
+    %true when length(Clients) == 1 ->
+    %  {stop, normal, Server};
     true ->
+      lager:debug("Encoder's client dead ~p: ~p", [Client, _Reason]),
       {noreply, Server#encoder{clients = lists:delete(Client, Clients)}};
     false ->
+      lager:info("Encoder stopping to some process death ~p: ~p", [Client, _Reason]),
       {stop, normal, Server}  
   end;
 
@@ -370,3 +372,5 @@ terminate(_Reason, #encoder{}) ->
 
 code_change(_OldVsn, State, _Extra) ->
   {ok, State}.
+
+

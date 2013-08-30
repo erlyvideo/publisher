@@ -36,7 +36,8 @@
   stream,
   options,
   last_dts,
-  encoder
+  encoder,
+  encoder_pid
 }).
 
 
@@ -135,8 +136,8 @@ handle_info({rtmp, RTMP, connected}, State) ->
   inet:setopts(Socket, [{sndbuf,1024*1024}]),
   {noreply, State};
 
-handle_info({rtmp, _Socket, disconnect, _}, State) ->
-  io:format("RTMP client disconnected~n"),
+handle_info({rtmp, _Socket, disconnect, _}, #publisher{url = URL} = State) ->
+  lager:info("RTMP client '~s' disconnected", [URL]),
   {stop, normal, State};
 
 handle_info({rtmp, _Socket, #rtmp_message{} = Message}, State) ->
@@ -146,11 +147,11 @@ handle_info(#video_frame{dts = DTS} = Frame, #publisher{rtmp = RTMP, stream = St
   send_frame(RTMP, Stream, Frame),
   {noreply, State#publisher{last_dts = DTS}};
 
-handle_info(dump_status, #publisher{encoder = undefined} = State) ->
-  error_logger:info_msg("not encoding~n"),
+handle_info(dump_status, #publisher{url = URL, encoder = undefined} = State) ->
+  lager:info("RTMP client ~s not encoding", [URL]),
   {noreply, State};
 
-handle_info(dump_status, #publisher{encoder = Encoder, last_dts = LastDTS} = State) ->
+handle_info(dump_status, #publisher{encoder = Encoder, url = URL, last_dts = LastDTS} = State) ->
   EncStatus = publish_encoder:status(Encoder),
   BufferedFrames = proplists:get_value(buffered_frames, EncStatus),
   AbsDelta = proplists:get_value(abs_delta, EncStatus),
@@ -161,11 +162,16 @@ handle_info(dump_status, #publisher{encoder = Encoder, last_dts = LastDTS} = Sta
       [L1,L2, {delta,L2-L1},{frames, round((L2-L1)*32 / 1024)}];
     L -> L
   end,
-  error_logger:info_msg("buffered:~p(~p) last_dts:~p abs_delta:~p delay:~p~n", [BufferedFrames, BufInfo, LastDTS, AbsDelta, AbsDelta - LastDTS]),
+  lager:info("~s: buffered:~p(~p) last_dts:~p abs_delta:~p delay:~p~n", [URL, BufferedFrames, BufInfo, LastDTS, AbsDelta, AbsDelta - LastDTS]),
   {noreply, State};
 
-handle_info(exit, #publisher{} = State) ->
+handle_info(exit, #publisher{url = URL} = State) ->
+  lager:info("RTMP '~s' is exiting due to exit message", [URL]),
   {stop, normal, State};
+
+handle_info({'DOWN', _, _, Pid, Reason}, #publisher{encoder_pid = Pid, url = URL} = Publisher) ->
+  lager:info("RTMP '~s' is exiting due to source death: ~p", [URL, Reason]),
+  {stop, normal, Publisher};
 
 handle_info(Msg, State) ->
   {stop, {unknown_info, Msg}, State}.
@@ -194,7 +200,7 @@ handle_invoke(#rtmp_funcall{command = <<"play">>, stream_id = StreamId, args = [
   rtmp_lib:play_start(RTMP, StreamId, 0, live),
   Encoder = binary_to_existing_atom(Camera, latin1),
   publish_encoder:subscribe(Encoder),
-  {noreply, State#publisher{encoder = Encoder}};
+  {noreply, State#publisher{encoder = Encoder, encoder_pid = whereis(Encoder)}};
 
 handle_invoke(#rtmp_funcall{command = <<"onStatus">>, args = [null, {object, Status}]}, #publisher{} = State) ->
   Code = proplists:get_value(code, Status),

@@ -76,6 +76,10 @@ load_config([{listen, Port, Options}|Config]) ->
   publisher:listen(Port, Options),
   load_config(Config);
 
+load_config([{loglevel, Level}|Config]) ->
+  lager:set_loglevel(lager_console_backend, Level),
+  load_config(Config);
+
 load_config([_|Config]) ->
   load_config(Config);
 

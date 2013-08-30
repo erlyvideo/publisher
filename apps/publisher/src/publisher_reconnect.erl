@@ -84,16 +84,16 @@ handle_info(check, #reconnector{url = URL, rtmp_pid = OldPid, schedule_url = Sch
     {true, true} ->
       {noreply, State};
     {true, false} ->
-      ?D({need_to_launch, URL}),
+      lager:info("Need to launch RTMP publisher '~s'", [URL]),
       {ok, Pid} = publisher_sup:start_publisher(active, URL, Options),
       {noreply, State#reconnector{rtmp_pid = Pid}};
     {false, false} ->
       {noreply, State};
     {false, true} ->
-      ?D({need_to_stop,URL,OldPid}),
+      lager:info("New RTMP client '~s' need to stop old pid: ~p", [URL, OldPid]),
       publisher_rtmp:stop(OldPid),
       timer:sleep(100),
-      (catch erlang:exit(OldPid, normal)),
+      (catch erlang:exit(OldPid, reconnect)),
       (catch erlang:exit(OldPid, kill)),
       {noreply, State};
     {undefined, _} ->
@@ -106,7 +106,7 @@ handle_info({'DOWN', _, process, _Publisher, _}, #reconnector{} = State) ->
   {noreply, State};
 
 handle_info(Info, State) ->
-  ?D({unknown_message,Info,State}),
+  lager:info("Reconnecter has message ~p", [Info]),
   {noreply, State}.
 
 
@@ -122,3 +122,5 @@ flush_check() ->
   
 is_alive(Pid) when is_pid(Pid) -> erlang:is_process_alive(Pid);
 is_alive(_) -> false.
+
+
