@@ -252,7 +252,7 @@ parse_audio_fmtp(#stream_info{codec = Codec, options = Options} = Stream, Opts) 
   Stream1#stream_info{config = Config}.
 
 
-parse_video_fmtp(#stream_info{codec = Codec} = Stream, Opts) ->
+parse_video_fmtp(#stream_info{codec = _Codec} = Stream, Opts) ->
   case proplists:get_value("sprop-parameter-sets", Opts) of
     undefined -> Stream;
     Sprop when is_list(Sprop) ->

@@ -352,9 +352,9 @@ digest_auth(Digest, Username, Password, URL, Request) ->
   _Qop = proplists:get_value(qop, Digest),
 
   % <<"auth">> == Qop orelse erlang:throw({unsupported_digest_auth, Qop}),
-  HA1 = to_hex(crypto:md5(iolist_to_binary([Username, ":", Realm, ":", Password]))),
-  HA2 = to_hex(crypto:md5(io_lib:format("~s:~s", [Request, URL]))),
-  Response = to_hex(crypto:md5(iolist_to_binary([HA1, ":", Nonce, ":", HA2]))),
+  HA1 = to_hex(crypto:hash(md5, iolist_to_binary([Username, ":", Realm, ":", Password]))),
+  HA2 = to_hex(crypto:hash(md5, io_lib:format("~s:~s", [Request, URL]))),
+  Response = to_hex(crypto:hash(md5, iolist_to_binary([HA1, ":", Nonce, ":", HA2]))),
 
 
   DigestAuth = io_lib:format("Authorization: Digest username=\"~s\", realm=\"~s\", nonce=\"~s\", uri=\"~s\", response=\"~s\"\r\n",

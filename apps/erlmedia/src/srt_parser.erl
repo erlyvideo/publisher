@@ -82,10 +82,6 @@ parse_time(Time) ->
   MS = binary_to_integer(MSBin),
   H * 3600000 + M * 60000 + S * 1000 + MS.
 
-binary_to_integer(Bin) ->
-  list_to_integer(binary_to_list(Bin)).
-
-
 
 -include_lib("eunit/include/eunit.hrl").
 
